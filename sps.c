@@ -22,10 +22,10 @@ typedef struct {
 
 // selection is always a rectangle
 typedef struct {
-    int startRow;
-    int startCol;
-    int endRow;
-    int endCol;
+    unsigned startRow;
+    unsigned startCol;
+    unsigned endRow;
+    unsigned endCol;
 } Selection;
 
 // struct for table
@@ -33,7 +33,7 @@ typedef struct {
 // others get replaced while reading the table
 // the content of the data array is basically CSV
 typedef struct {
-    int rows, cols;
+    unsigned rows, cols;
     Cell **cells;
     Selection selection;
     char delimiter;
@@ -154,7 +154,7 @@ Table table_ctor() {
     table.cols = 0;
     table.delimiter = ' ';
     table.cells = NULL;
-    // table->selection = TODO
+    // table->selection = TODO;
     return table;
 }
 
@@ -238,6 +238,26 @@ State readTable(Table *table, FILE *f, char *delimiters) {
         buffer[i] = c;
     }
 
+    return SUCCESS;
+}
+
+void printCell(FILE *f, Cell *cell) {
+    for (int i=0; i<cell->len; i++) {
+        fputc(f, cell->content[i]);
+    }
+}
+
+State printTable(Table *table, FILE *f) {
+    for (int i=0; i < table->rows; i++) {
+        for (int j=0; j < table->cols; j++) {
+            printCell(f, &table->cells[i][j]);
+            
+            if (j < table->cols - 1) 
+                fputc(f, ';');
+            else
+                fputc(f, '\n');
+        }
+    }
     return SUCCESS;
 }
 
@@ -767,7 +787,7 @@ int main(int argc, char **argv) {
 
     readTable(&table, stdin, delimiters);
 
-    //printTable(table);
+    printTable(&table, stdout);
 
     table_dtor(&table);
 
