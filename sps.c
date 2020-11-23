@@ -20,6 +20,32 @@ typedef struct {
     unsigned len;
 } Cell;
 
+Cell cell_ctor() {
+    Cell cell;
+    cell.content = NULL;
+    cell.len = 0;
+    return cell;
+}
+
+void cell_dtor(Cell *cell) {
+    free(cell->content);
+    cell->content = NULL;
+    cell->len = 0;
+}
+
+void writeCell(Cell *cell, char *src, unsigned len) {
+    cell->content = realloc(cell->content, len * sizeof(char));
+    cell->len = len;
+    memcpy(cell->content, src, len * sizeof(char));
+}
+
+void printCell(Cell *cell, FILE *f) {
+    for (unsigned i=0; i<cell->len; i++) {
+        fputc(cell->content[i], f);
+    }
+}
+
+
 // selection is always a rectangle
 typedef struct {
     unsigned startRow;
@@ -27,6 +53,7 @@ typedef struct {
     unsigned endRow;
     unsigned endCol;
 } Selection;
+
 
 // struct for table
 // stores only one main delimiter
@@ -135,18 +162,7 @@ void printErrorMessage(State err_state) {
     }
 }
 
-Cell cell_ctor() {
-    Cell cell;
-    cell.content = NULL;
-    cell.len = 0;
-    return cell;
-}
 
-void cell_dtor(Cell *cell) {
-    free(cell->content);
-    cell->content = NULL;
-    cell->len = 0;
-}
 
 Table table_ctor() {
     Table table;
@@ -159,8 +175,8 @@ Table table_ctor() {
 }
 
 void table_dtor(Table *table) {
-    for (int i=0; i < table->rows; i++) {
-        for (int j=0; j < table->rows; j++) {
+    for (unsigned i=0; i < table->rows; i++) {
+        for (unsigned j=0; j < table->rows; j++) {
             cell_dtor(&table->cells[i][j]);
         }
         free(table->cells[i]);
@@ -178,7 +194,7 @@ State addRow(Table *table) {
 
     table->cells = realloc(table->cells, table->rows * sizeof(Cell *));
 
-    for (int i=0; i < table->cols; i++) {
+    for (unsigned i=0; i < table->cols; i++) {
         table->cells[table->rows - 1][i] = cell_ctor();
 
         if (table->cells[table->rows - 1][i].content == NULL) {
@@ -191,17 +207,37 @@ State addRow(Table *table) {
 
 void deleteRow(Table *table) {
 
-    for (int i=0; i < table->cols; i++) {
+    for (unsigned i=0; i < table->cols; i++) {
         cell_dtor(&table->cells[table->rows - 1][i]);
     }
 
     table->rows--;
 }
 
+State addCol(Table *table) {
+    table->cols++;
+
+    for (unsigned i=0; i < table->rows; i++) {
+        table->cells[i] = realloc(table->cells[i], table->cols * sizeof(Cell *));
+        table->cells[i][table->cols - 1] = cell_ctor();
+    }
+
+    return SUCCESS;
+}
+
+void deleteCol(Table *table) {
+    for (unsigned i=0; i < table->rows; i++) {
+        cell_dtor(&table->cells[i][table->cols - 1]);
+    }
+
+    table->cols--;
+}
+
 
 // Reads table from stdin and saves it into the table structure
 // The function also reads delimiters from arguments
 // Returns program state
+// Expects an empty table
 State readTable(Table *table, FILE *f, char *delimiters) {
 
     // set the table's main delimiter
@@ -209,18 +245,21 @@ State readTable(Table *table, FILE *f, char *delimiters) {
 
     char c; // scanned character
 
-    int cRow=1, cCol=1; // current row and column
+    unsigned row=0, col=0, i=0; // current row and column
     char buffer[MAX_CELL_LENGTH];
 
-
-    int i=0;
+    addRow(table);
+    addCol(table);
 
     while ((c = fgetc(f)) != EOF) {
-
         // if scanned character is delimiter
         if (strchr(delimiters, c)) {
+            if (col >= table->cols)
+                addCol(table);
 
-            cCol++;
+            writeCell(&table->cells[row][col], buffer, i);
+            i = 0;
+            col++;
             continue;
         }
 
@@ -231,31 +270,30 @@ State readTable(Table *table, FILE *f, char *delimiters) {
         // check for \n is after check for escape character
         // it is the only character, that cannot be escaped
         if (c == '\n')  {
-            cRow++;
-            cCol = 1;
+            if (col >= table->cols)
+                addRow(table);
+
+            writeCell(&table->cells[row][col], buffer, i);
+            i = 0;
+            col = 0;
+            row++;
         }
-
-        buffer[i] = c;
+        buffer[i++] = c;
     }
-
     return SUCCESS;
 }
 
-void printCell(FILE *f, Cell *cell) {
-    for (int i=0; i<cell->len; i++) {
-        fputc(f, cell->content[i]);
-    }
-}
+
 
 State printTable(Table *table, FILE *f) {
-    for (int i=0; i < table->rows; i++) {
-        for (int j=0; j < table->cols; j++) {
-            printCell(f, &table->cells[i][j]);
-            
-            if (j < table->cols - 1) 
-                fputc(f, ';');
+    for (unsigned i=0; i < table->rows; i++) {
+        for (unsigned j=0; j < table->cols; j++) {
+            printCell(&table->cells[i][j], f);
+
+            if (j < table->cols - 1)
+                fputc(';', f);
             else
-                fputc(f, '\n');
+                fputc('\n', f);
         }
     }
     return SUCCESS;
@@ -782,13 +820,10 @@ int main(int argc, char **argv) {
 
     Table table = table_ctor();
     State state;
-
     char *delimiters = ":;";
 
     readTable(&table, stdin, delimiters);
-
     printTable(&table, stdout);
-
     table_dtor(&table);
 
     return EXIT_SUCCESS;
