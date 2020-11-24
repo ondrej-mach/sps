@@ -140,10 +140,9 @@ State addRow(Table *table) {
     for (unsigned i=0; i < table->cols; i++) {
         table->cells[table->rows][i] = cell_ctor();
 
-        if (table->cells[table->rows][i].content == NULL) {
-            // if the allocation fails
-            return ERR_MEMORY;
-        }
+        // if (TODO) {
+        //     return ERR_MEMORY;
+        // }
     }
     table->rows++;
     return SUCCESS;
@@ -159,13 +158,11 @@ void deleteRow(Table *table) {
 }
 
 State addCol(Table *table) {
-    table->cols++;
-
     for (unsigned i=0; i < table->rows; i++) {
-        table->cells[i] = realloc(table->cells[i], table->cols * sizeof(Cell *));
-        table->cells[i][table->cols - 1] = cell_ctor();
+        table->cells[i] = realloc(table->cells[i], (table->cols + 1) * sizeof(Cell));
+        table->cells[i][table->cols] = cell_ctor();
     }
-
+    table->cols++;
     return SUCCESS;
 }
 
@@ -206,6 +203,8 @@ State readTable(Table *table, FILE *f, char *delimiters) {
             continue;
         }
 
+        // if escape character, read the next one
+        // it wont get checked
         if (c == '\\') {
             c = fgetc(f);
         }
@@ -213,18 +212,22 @@ State readTable(Table *table, FILE *f, char *delimiters) {
         // check for \n is after check for escape character
         // it is the only character, that cannot be escaped
         if (c == '\n')  {
-            addRow(table);
+            if (col >= table->cols)
+                addCol(table);
+
             writeCell(&table->cells[row][col], buffer, i);
+            addRow(table);
             i = 0;
             col = 0;
             row++;
+            continue;
         }
+        // if there is nothing special about the characters
+        // write it into the buffer
         buffer[i++] = c;
     }
     return SUCCESS;
 }
-
-
 
 State printTable(Table *table, FILE *f) {
     for (unsigned i=0; i < table->rows; i++) {
