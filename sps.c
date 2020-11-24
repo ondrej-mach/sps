@@ -45,7 +45,6 @@ void printCell(Cell *cell, FILE *f) {
     }
 }
 
-
 // selection is always a rectangle
 typedef struct {
     unsigned startRow;
@@ -53,7 +52,6 @@ typedef struct {
     unsigned endRow;
     unsigned endCol;
 } Selection;
-
 
 // struct for table
 // stores only one main delimiter
@@ -65,6 +63,32 @@ typedef struct {
     Selection selection;
     char delimiter;
 } Table;
+
+
+Table table_ctor() {
+    Table table;
+    table.rows = 0;
+    table.cols = 0;
+    table.delimiter = ' ';
+    table.cells = NULL;
+    // table->selection = TODO;
+    return table;
+}
+
+void table_dtor(Table *table) {
+    for (unsigned i=0; i < table->rows; i++) {
+        for (unsigned j=0; j < table->rows; j++) {
+            cell_dtor(&table->cells[i][j]);
+        }
+        free(table->cells[i]);
+    }
+
+    free(table->cells);
+    table->cells = NULL;
+
+    table->rows = 0;
+    table->cols = 0;
+}
 
 
 // all program states
@@ -109,99 +133,19 @@ typedef struct {
 } Command;
 
 
-// prints basic help on how to use the program
-void printUsage() {
-    const char *usageString = "\nUsage:\n"
-        "./sheet [-d DELIM] [Commands for editing the table]\n"
-        "or\n"
-        "./sheet [-d DELIM] [Row selection] [Command for processing the data]\n";
-
-    fprintf(stderr, "%s", usageString);
-}
-
-// prints error message according to the error state
-void printErrorMessage(State err_state) {
-    switch(err_state) {
-        case NOT_FOUND:
-            fputs("No commands found\n", stderr);
-            printUsage();
-            break;
-
-        case ERR_GENERIC:
-            fputs("Generic error\n", stderr);
-            break;
-
-        case ERR_TOO_LONG:
-            fputs("Maximum file size is 10kiB\n", stderr);
-            break;
-
-        case ERR_OUT_OF_RANGE:
-            fputs("Given cell coordinates are out of range\n", stderr);
-            break;
-
-        case ERR_BAD_SYNTAX:
-            fputs("Bad syntax\n", stderr);
-            break;
-
-        case ERR_TABLE_EMPTY:
-            fputs("Table cannot be empty\n", stderr);
-            break;
-
-        case ERR_BAD_ORDER:
-            fputs("Commands are used in wrong order\n", stderr);
-            printUsage();
-            break;
-
-        case ERR_BAD_TABLE:
-            fputs("Table has different numbers of columns in each row\n", stderr);
-            break;
-
-        default:
-            fputs("Unknown error\n", stderr);
-            break;
-    }
-}
-
-
-
-Table table_ctor() {
-    Table table;
-    table.rows = 0;
-    table.cols = 0;
-    table.delimiter = ' ';
-    table.cells = NULL;
-    // table->selection = TODO;
-    return table;
-}
-
-void table_dtor(Table *table) {
-    for (unsigned i=0; i < table->rows; i++) {
-        for (unsigned j=0; j < table->rows; j++) {
-            cell_dtor(&table->cells[i][j]);
-        }
-        free(table->cells[i]);
-    }
-
-    free(table->cells);
-    table->cells = NULL;
-
-    table->rows = 0;
-    table->cols = 0;
-}
-
 State addRow(Table *table) {
-    table->rows++;
-
-    table->cells = realloc(table->cells, table->rows * sizeof(Cell *));
+    table->cells = realloc(table->cells, (table->rows + 1) * sizeof(Cell *));
+    table->cells[table->rows] = malloc(table->cols * sizeof(Cell));
 
     for (unsigned i=0; i < table->cols; i++) {
-        table->cells[table->rows - 1][i] = cell_ctor();
+        table->cells[table->rows][i] = cell_ctor();
 
-        if (table->cells[table->rows - 1][i].content == NULL) {
+        if (table->cells[table->rows][i].content == NULL) {
             // if the allocation fails
             return ERR_MEMORY;
         }
     }
+    table->rows++;
     return SUCCESS;
 }
 
@@ -239,7 +183,6 @@ void deleteCol(Table *table) {
 // Returns program state
 // Expects an empty table
 State readTable(Table *table, FILE *f, char *delimiters) {
-
     // set the table's main delimiter
     table->delimiter = delimiters[0];
 
@@ -270,9 +213,7 @@ State readTable(Table *table, FILE *f, char *delimiters) {
         // check for \n is after check for escape character
         // it is the only character, that cannot be escaped
         if (c == '\n')  {
-            if (col >= table->cols)
-                addRow(table);
-
+            addRow(table);
             writeCell(&table->cells[row][col], buffer, i);
             i = 0;
             col = 0;
@@ -815,6 +756,58 @@ int main(int argc, char **argv) {
     return EXIT_FAILURE;
 }*/
 
+// prints basic help on how to use the program
+void printUsage() {
+    const char *usageString = "\nUsage:\n"
+        "./sheet [-d DELIM] [Commands for editing the table]\n"
+        "or\n"
+        "./sheet [-d DELIM] [Row selection] [Command for processing the data]\n";
+
+    fprintf(stderr, "%s", usageString);
+}
+
+// prints error message according to the error state
+void printErrorMessage(State err_state) {
+    switch(err_state) {
+        case NOT_FOUND:
+            fputs("No commands found\n", stderr);
+            printUsage();
+            break;
+
+        case ERR_GENERIC:
+            fputs("Generic error\n", stderr);
+            break;
+
+        case ERR_TOO_LONG:
+            fputs("Maximum file size is 10kiB\n", stderr);
+            break;
+
+        case ERR_OUT_OF_RANGE:
+            fputs("Given cell coordinates are out of range\n", stderr);
+            break;
+
+        case ERR_BAD_SYNTAX:
+            fputs("Bad syntax\n", stderr);
+            break;
+
+        case ERR_TABLE_EMPTY:
+            fputs("Table cannot be empty\n", stderr);
+            break;
+
+        case ERR_BAD_ORDER:
+            fputs("Commands are used in wrong order\n", stderr);
+            printUsage();
+            break;
+
+        case ERR_BAD_TABLE:
+            fputs("Table has different numbers of columns in each row\n", stderr);
+            break;
+
+        default:
+            fputs("Unknown error\n", stderr);
+            break;
+    }
+}
 
 int main(int argc, char **argv) {
 
