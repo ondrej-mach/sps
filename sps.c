@@ -80,12 +80,10 @@ typedef struct {
 
 // ---------- CELL FUNCTIONS -----------
 
-// constructs a new cell
-Cell cell_ctor() {
-    Cell cell;
-    cell.content = NULL;
-    cell.len = 0;
-    return cell;
+// constructs a new empty cell
+void cell_ctor(Cell *cell) {
+    cell->content = NULL;
+    cell->len = 0;
 }
 
 // destructs a cell
@@ -105,6 +103,7 @@ State writeCell(Cell *cell, char *src, unsigned len) {
 
     cell->len = len;
     memcpy(cell->content, src, len * sizeof(char));
+    return SUCCESS;
 }
 
 // prints contents of one cell into a file
@@ -117,13 +116,10 @@ void printCell(Cell *cell, FILE *f) {
 // ---------- SIMPLE TABLE FUNCTIONS -----------
 
 // constructs a new empty table
-Table table_ctor() {
-    Table table;
-    table.rows = 0;
-    table.cols = 0;
-    table.delimiter = ' ';
-    table.cells = NULL;
-    return table;
+void table_ctor(Table *table) {
+    table->rows = 0;
+    table->cols = 0;
+    table->cells = NULL;
 }
 
 // deallocates all the pointers in the table structure
@@ -158,7 +154,7 @@ State addRow(Table *table) {
 
     // initialize all the cells in the new row
     for (unsigned i=0; i < table->cols; i++) {
-        table->cells[table->rows][i] = cell_ctor();
+        cell_ctor(&table->cells[table->rows][i]);
     }
     table->rows++;
     return SUCCESS;
@@ -178,7 +174,7 @@ void deleteRow(Table *table) {
 State addCol(Table *table) {
     for (unsigned i=0; i < table->rows; i++) {
         table->cells[i] = realloc(table->cells[i], (table->cols + 1) * sizeof(Cell));
-        table->cells[i][table->cols] = cell_ctor();
+        cell_ctor(&table->cells[i][table->cols]);
     }
     table->cols++;
     return SUCCESS;
@@ -199,14 +195,17 @@ void deleteCol(Table *table) {
 // Returns program state
 // Expects an empty table
 State readTable(Table *table, FILE *f, char *delimiters) {
+    // default delimiters
+    char *defaultDelimiters = " ";
+    if (delimiters == NULL)
+        delimiters = defaultDelimiters;
     // set the table's main delimiter
     table->delimiter = delimiters[0];
-
-    char c; // scanned character
-
-    unsigned row=0, col=0, i=0; // current row and column
+    // scanned character
+    char c;
+    // current row and column
+    unsigned row=0, col=0, i=0;
     char buffer[MAX_CELL_LENGTH];
-
     addRow(table);
     addCol(table);
 
@@ -237,8 +236,10 @@ State readTable(Table *table, FILE *f, char *delimiters) {
             if (col >= table->cols)
                 addCol(table);
 
-            writeCell(&table->cells[row][col], buffer, i);
+            if (row >= table->rows)
+                addRow(table);
 
+            writeCell(&table->cells[row][col], buffer, i);
             i = 0;
             col = 0;
             row++;
@@ -252,18 +253,17 @@ State readTable(Table *table, FILE *f, char *delimiters) {
 }
 
 // prints the table into a file
-State printTable(Table *table, FILE *f) {
+void printTable(Table *table, FILE *f) {
     for (unsigned i=0; i < table->rows; i++) {
         for (unsigned j=0; j < table->cols; j++) {
             printCell(&table->cells[i][j], f);
 
             if (j < table->cols - 1)
-                fputc(';', f);
+                fputc(table->delimiter, f);
             else
                 fputc('\n', f);
         }
     }
-    return SUCCESS;
 }
 
 /*
@@ -780,6 +780,21 @@ int main(int argc, char **argv) {
     return EXIT_FAILURE;
 }*/
 
+State readDelim(int argc, char **argv, char **delimiters) {
+    // in case nothing is found
+    *delimiters = NULL;
+
+    for (int i=1; i < argc; i++) {
+        if (strcmp("-d", argv[i]) == 0) {
+            if (i+1 <= argc)
+                return ERR_BAD_SYNTAX;
+
+            *delimiters = argv[i+1];
+        }
+    }
+    return SUCCESS;
+}
+
 // prints basic help on how to use the program
 void printUsage() {
     const char *usageString = "\nUsage:\n"
@@ -835,11 +850,24 @@ void printErrorMessage(State err_state) {
 
 int main(int argc, char **argv) {
 
-    Table table = table_ctor();
-    State state;
-    char *delimiters = ":;";
+    Table table;
+    table_ctor(&table);
 
-    readTable(&table, stdin, delimiters);
+    State s;
+
+    char *delimiters;
+    s = readDelim(argc, argv, &delimiters);
+    if (s != SUCCESS) {
+        table_dtor(&table);
+        return s;
+    }
+
+    s = readTable(&table, stdin, delimiters);
+    if (s != SUCCESS) {
+        table_dtor(&table);
+        return s;
+    }
+
     printTable(&table, stdout);
     table_dtor(&table);
 
