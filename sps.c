@@ -20,31 +20,6 @@ typedef struct {
     unsigned len;
 } Cell;
 
-Cell cell_ctor() {
-    Cell cell;
-    cell.content = NULL;
-    cell.len = 0;
-    return cell;
-}
-
-void cell_dtor(Cell *cell) {
-    free(cell->content);
-    cell->content = NULL;
-    cell->len = 0;
-}
-
-void writeCell(Cell *cell, char *src, unsigned len) {
-    cell->content = realloc(cell->content, len * sizeof(char));
-    cell->len = len;
-    memcpy(cell->content, src, len * sizeof(char));
-}
-
-void printCell(Cell *cell, FILE *f) {
-    for (unsigned i=0; i<cell->len; i++) {
-        fputc(cell->content[i], f);
-    }
-}
-
 // selection is always a rectangle
 typedef struct {
     unsigned startRow;
@@ -64,33 +39,6 @@ typedef struct {
     char delimiter;
 } Table;
 
-
-Table table_ctor() {
-    Table table;
-    table.rows = 0;
-    table.cols = 0;
-    table.delimiter = ' ';
-    table.cells = NULL;
-    // table->selection = TODO;
-    return table;
-}
-
-void table_dtor(Table *table) {
-    for (unsigned i=0; i < table->rows; i++) {
-        for (unsigned j=0; j < table->rows; j++) {
-            cell_dtor(&table->cells[i][j]);
-        }
-        free(table->cells[i]);
-    }
-
-    free(table->cells);
-    table->cells = NULL;
-
-    table->rows = 0;
-    table->cols = 0;
-}
-
-
 // all program states
 // these are returned by most functions that can fail in any way
 typedef enum {
@@ -106,7 +54,6 @@ typedef enum {
     ERR_MEMORY
 } State;
 
-
 // categorizes every command
 // program has to know which commands can be combined
 typedef enum {
@@ -115,7 +62,6 @@ typedef enum {
     LAYOUT,
     SELECTION,
 } TypeOfCommand;
-
 
 // always go together, easier to pass around
 typedef struct {
@@ -132,31 +78,103 @@ typedef struct {
     State (*fnOneStr)(Table*, int, char*);
 } Command;
 
+// ---------- CELL FUNCTIONS -----------
 
+// constructs a new cell
+Cell cell_ctor() {
+    Cell cell;
+    cell.content = NULL;
+    cell.len = 0;
+    return cell;
+}
+
+// destructs a cell
+void cell_dtor(Cell *cell) {
+    free(cell->content);
+    cell->content = NULL;
+    cell->len = 0;
+}
+
+// writes chars from buffer into a cell
+State writeCell(Cell *cell, char *src, unsigned len) {
+    char *p = realloc(cell->content, len * sizeof(char));
+    if (p)
+        cell->content = p;
+    else
+        return ERR_MEMORY;
+
+    cell->len = len;
+    memcpy(cell->content, src, len * sizeof(char));
+}
+
+// prints contents of one cell into a file
+void printCell(Cell *cell, FILE *f) {
+    for (unsigned i=0; i<cell->len; i++) {
+        fputc(cell->content[i], f);
+    }
+}
+
+// ---------- SIMPLE TABLE FUNCTIONS -----------
+
+// constructs a new empty table
+Table table_ctor() {
+    Table table;
+    table.rows = 0;
+    table.cols = 0;
+    table.delimiter = ' ';
+    table.cells = NULL;
+    return table;
+}
+
+// deallocates all the pointers in the table structure
+void table_dtor(Table *table) {
+    for (unsigned i=0; i < table->rows; i++) {
+        for (unsigned j=0; j < table->cols; j++) {
+            cell_dtor(&table->cells[i][j]);
+        }
+        free(table->cells[i]);
+    }
+
+    free(table->cells);
+    table->cells = NULL;
+
+    table->rows = 0;
+    table->cols = 0;
+}
+
+// adds an empty row to the end of the table
 State addRow(Table *table) {
-    table->cells = realloc(table->cells, (table->rows + 1) * sizeof(Cell *));
-    table->cells[table->rows] = malloc(table->cols * sizeof(Cell));
+    // allocate one more row pointer in the array
+    Cell **p = realloc(table->cells, (table->rows + 1) * sizeof(Cell *));
+    if (p)
+        table->cells = p;
+    else
+        return ERR_MEMORY;
 
+    // allocate new cell array for the new row
+    table->cells[table->rows] = malloc(table->cols * sizeof(Cell));
+    if (table->cells[table->rows] == NULL)
+        return ERR_MEMORY;
+
+    // initialize all the cells in the new row
     for (unsigned i=0; i < table->cols; i++) {
         table->cells[table->rows][i] = cell_ctor();
-
-        // if (TODO) {
-        //     return ERR_MEMORY;
-        // }
     }
     table->rows++;
     return SUCCESS;
 }
 
+// deletes the last row from the table
 void deleteRow(Table *table) {
-
+    // go through all the cells in the last row
+    // and destruct them
     for (unsigned i=0; i < table->cols; i++) {
         cell_dtor(&table->cells[table->rows - 1][i]);
     }
-
     table->rows--;
 }
 
+// adds a column to the end of the table
 State addCol(Table *table) {
     for (unsigned i=0; i < table->rows; i++) {
         table->cells[i] = realloc(table->cells[i], (table->cols + 1) * sizeof(Cell));
@@ -166,14 +184,15 @@ State addCol(Table *table) {
     return SUCCESS;
 }
 
+// deletes the last column of the table
 void deleteCol(Table *table) {
     for (unsigned i=0; i < table->rows; i++) {
         cell_dtor(&table->cells[i][table->cols - 1]);
     }
-
     table->cols--;
 }
 
+// ---------- MORE COMPLEX FUNCTIONS -----------
 
 // Reads table from stdin and saves it into the table structure
 // The function also reads delimiters from arguments
@@ -197,6 +216,9 @@ State readTable(Table *table, FILE *f, char *delimiters) {
             if (col >= table->cols)
                 addCol(table);
 
+            if (row >= table->rows)
+                addRow(table);
+
             writeCell(&table->cells[row][col], buffer, i);
             i = 0;
             col++;
@@ -216,7 +238,7 @@ State readTable(Table *table, FILE *f, char *delimiters) {
                 addCol(table);
 
             writeCell(&table->cells[row][col], buffer, i);
-            addRow(table);
+
             i = 0;
             col = 0;
             row++;
@@ -229,6 +251,7 @@ State readTable(Table *table, FILE *f, char *delimiters) {
     return SUCCESS;
 }
 
+// prints the table into a file
 State printTable(Table *table, FILE *f) {
     for (unsigned i=0; i < table->rows; i++) {
         for (unsigned j=0; j < table->cols; j++) {
@@ -242,8 +265,6 @@ State printTable(Table *table, FILE *f) {
     }
     return SUCCESS;
 }
-
-
 
 /*
 // inserts an empty row into the table
