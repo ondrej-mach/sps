@@ -156,8 +156,21 @@ size_t parseString(char *dst, char *src, char *delims) {
         srcIndex++;
         dstIndex++;
     }
-    dst[++dstIndex] = '\0';
+    dst[dstIndex] = '\0';
     return srcIndex;
+}
+
+char *fileToBuffer(FILE *f) {
+    // get the file into a buffer
+    char *buffer = malloc(sizeof(char));;
+    int i = 0;
+    char c;
+
+    while ((buffer[i] = fgetc(f)) != EOF) {
+        i++;
+        buffer = realloc(buffer, (i+1) * sizeof(char));
+    }
+    buffer[i] = '\0';
 }
 
 // ---------- SIMPLE TABLE FUNCTIONS -----------
@@ -249,32 +262,20 @@ State readTable(Table *table, FILE *f, char *delimiters) {
     // set the table's main delimiter
     table->delim = delimiters[0];
 
-    // get the file into a buffer
-    char *fileBuffer = NULL;
-    size_t fileBufferLen = 0;
-    char c;
-
-    while ((c = fgetc(f)) != EOF) {
-        fileBuffer = realloc(fileBuffer, fileBufferLen+1 * sizeof(char));
-        fileBuffer[fileBufferLen] = c;
-        fileBufferLen++;
-    }
-    fileBuffer[fileBufferLen] = '\0';
+    fileBuffer = fileToBuffer(f);
 
     // current row and column
     unsigned row=0, col=0;
     // points at current character
 
     size_t i = 0;
-    while (i < fileBufferLen) {
+    while (true) {
         char cellBuffer[MAX_CELL_LENGTH];
-
         size_t shift = parseString(cellBuffer, &fileBuffer[i], delimiters);
+        // +1 to skip the delimiter
         i += shift + 1;
 
-        if (shift == 0)
-            return ERR_BAD_FORMAT;
-
+        // write to table
         if (col >= table->cols)
             addCol(table);
 
@@ -283,14 +284,25 @@ State readTable(Table *table, FILE *f, char *delimiters) {
 
         writeCell(&table->cells[row][col], cellBuffer);
 
-        if (fileBuffer[i-1] == '\0')
+        if (fileBuffer[i-1] == '\0') {
             break;
 
-        if (fileBuffer[i-1] == '\n')
+        if (fileBuffer[i-1] == '\n') {
+            // end of line
             row++;
-        else
+            col = 0;
+            continue;
+        }
+
+        if (strchr(delimiters, fileBuffer[i-1]))
+            // delimiter
             col++;
+            continue;
+        }
+        // if nothing matches, the scanned STR was bad
+        return ERR_BAD_FORMAT;
     }
+    free(fileBuffer);
     return SUCCESS;
 }
 
