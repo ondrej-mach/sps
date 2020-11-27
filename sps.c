@@ -10,7 +10,10 @@
 #include <stdbool.h>
 
 #define NUM_COMMANDS 25
-#define MAX_CELL_LENGTH 1000
+#define MAX_CELL_LENGTH 1001
+#define MAX_COMMAND_LENGTH 1001
+#define MAX_FILENAME_LENGTH 1001
+#define MAX_DELIMITERS 1001
 
 // struct for each cell
 // character array isn't good enough, because there can be '\0'
@@ -31,7 +34,6 @@ typedef struct {
 // struct for table
 // stores only one main delimiter
 // others get replaced while reading the table
-// the content of the data array is basically CSV
 typedef struct {
     unsigned rows, cols;
     Cell **cells;
@@ -49,6 +51,7 @@ typedef enum {
     ERR_OUT_OF_RANGE,
     ERR_BAD_SYNTAX,
     ERR_TABLE_EMPTY,
+    ERR_FILE_ACCESS,
     ERR_BAD_ORDER,
     ERR_BAD_TABLE,
     ERR_MEMORY
@@ -206,10 +209,13 @@ State readTable(Table *table, FILE *f, char *delimiters) {
     // current row and column
     unsigned row=0, col=0, i=0;
     char buffer[MAX_CELL_LENGTH];
-    addRow(table);
-    addCol(table);
 
     while ((c = fgetc(f)) != EOF) {
+        // only first character can start quoted cell
+        if ((c == '\"') and (i == 0)) {
+            isQuoted = true;
+        }
+
         // if scanned character is delimiter
         if (strchr(delimiters, c)) {
             if (col >= table->cols)
@@ -780,20 +786,56 @@ int main(int argc, char **argv) {
     return EXIT_FAILURE;
 }*/
 
-State readDelim(int argc, char **argv, char **delimiters) {
+// reads delimiterrrs from arguments
+State parseArguments(int argc, char **argv, char *delimiters, char *commands, char *filename) {
     // in case nothing is found
-    *delimiters = NULL;
+    strcpy(delimiters, " ");
 
-    for (int i=1; i < argc; i++) {
-        if (strcmp("-d", argv[i]) == 0) {
-            if (i+1 <= argc)
-                return ERR_BAD_SYNTAX;
+    int i = 1;
 
-            *delimiters = argv[i+1];
-        }
+    // reading delimiters
+    if (strcmp("-d", argv[i]) == 0) {
+        if (++i >= argc)
+            return ERR_BAD_SYNTAX;
+
+        strcpy(delimiters, argv[i]);
+        if (++i >= argc)
+            return ERR_BAD_SYNTAX;
     }
+
+    // reading commands from file
+    if (strcmp("-c", argv[i]) == 0) {
+        if (++i >= argc)
+            return ERR_BAD_SYNTAX;
+
+        // file with commands
+        FILE *fp = fopen(argv[i], "r");
+        if (!fp)
+            return ERR_FILE_ACCESS;
+
+        fscanf(fp, "%1000s", commands);
+        fclose(fp);
+
+        if (++i >= argc)
+            return ERR_BAD_SYNTAX;
+    } else {
+        // reading commands from the argument
+        strcpy(commands, argv[i]);
+
+        if (++i >= argc)
+            return ERR_BAD_SYNTAX;
+    }
+
+    strcpy(filename, argv[i]);
+
+    // if there are any arguments left at this point,
+    // the syntax must be wrong
+    if (i < argc-1)
+        return ERR_BAD_SYNTAX;
+
     return SUCCESS;
 }
+
 
 // prints basic help on how to use the program
 void printUsage() {
@@ -808,6 +850,9 @@ void printUsage() {
 // prints error message according to the error state
 void printErrorMessage(State err_state) {
     switch(err_state) {
+        case SUCCESS:
+            break;
+
         case NOT_FOUND:
             fputs("No commands found\n", stderr);
             printUsage();
@@ -849,27 +894,38 @@ void printErrorMessage(State err_state) {
 }
 
 int main(int argc, char **argv) {
-
+    // the only instance of the table
     Table table;
     table_ctor(&table);
 
-    State s;
+    State s = SUCCESS;
+    // file with table data
+    FILE *fp = NULL;
 
-    char *delimiters;
-    s = readDelim(argc, argv, &delimiters);
-    if (s != SUCCESS) {
-        table_dtor(&table);
-        return s;
+    char delimiters[MAX_DELIMITERS];
+    char commands[MAX_COMMAND_LENGTH];
+    char filename[MAX_FILENAME_LENGTH];
+
+    if (s == SUCCESS)
+        s = parseArguments(argc, argv, delimiters, commands, filename);
+
+    if (s == SUCCESS) {
+        fp = fopen(filename, "r+");
+        if (!fp)
+            s = ERR_FILE_ACCESS;
     }
 
-    s = readTable(&table, stdin, delimiters);
-    if (s != SUCCESS) {
-        table_dtor(&table);
-        return s;
-    }
+    if (s == SUCCESS)
+        s = readTable(&table, fp, delimiters);
 
-    printTable(&table, stdout);
+    if (s == SUCCESS)
+        printTable(&table, stdout);
+
+    // if file is opened, close it
+    if (fp)
+        fclose(fp);
+
     table_dtor(&table);
-
-    return EXIT_SUCCESS;
+    printErrorMessage(s);
+    return s;
 }
