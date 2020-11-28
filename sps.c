@@ -96,7 +96,7 @@ void cell_dtor(Cell *cell) {
 
 // writes chars from buffer into a cell
 State writeCell(Cell *cell, char *src) {
-    char *p = realloc(cell->str, strlen(src));
+    char *p = realloc(cell->str, strlen(src)+1);
     if (p)
         cell->str = p;
     else
@@ -107,9 +107,19 @@ State writeCell(Cell *cell, char *src) {
 }
 
 // prints contents of one cell into a file
-void printCell(Cell *cell, FILE *f) {
-    // TODO special characters
-    fprintf(f, "%s", cell->str);
+void printCell(Table *table, Cell *cell, FILE *f) {
+    char buffer[2*strlen(cell->str) + 1];
+    strcpy(buffer, "");
+    // TODO
+    if (strchr(cell->str, table->delim)) {
+        // if there is delimiter in the cell
+        strcat(buffer, "\"");
+        strcat(buffer, cell->str);
+        strcat(buffer, "\"");
+    } else {
+        strcat(buffer, cell->str);
+    }
+    fprintf(f, "%s", buffer);
 }
 
 // ---------- STRING FUNCTIONS ------------
@@ -121,25 +131,20 @@ size_t parseString(char *dst, char *src, char *delims) {
     int srcIndex = 0, dstIndex = 0;
     bool isQuoted = false, isEscaped = false;
 
-    while (src[srcIndex] != '\0') {
+    for (; src[srcIndex] != '\0'; srcIndex++) {
         // if escape character
         if ((src[srcIndex] == '\\') && !isEscaped) {
             isEscaped = true;
-            srcIndex++;
             continue;
         }
-
         // only first character can start quoted cell
         if ((src[srcIndex] == '\"') && (srcIndex == 0) && !isEscaped) {
             isQuoted = !isQuoted;
-            srcIndex++;
             continue;
         }
-
         // if scanned character is delimiter
         if (strchr(delims, src[srcIndex]) && !isEscaped && !isQuoted)
             break;
-
         // check for \n is after check for escape character
         // it is the only character, that cannot be escaped
         if (src[srcIndex] == '\n')  {
@@ -148,14 +153,15 @@ size_t parseString(char *dst, char *src, char *delims) {
                 return 0;
             break;
         }
-
         // if there is nothing special about the characters
         // write it into the buffer
         dst[dstIndex] = src[srcIndex];
         isEscaped = false;
-        srcIndex++;
         dstIndex++;
     }
+    if (isQuoted)
+        return 0;
+
     dst[dstIndex] = '\0';
     return srcIndex;
 }
@@ -164,13 +170,13 @@ char *fileToBuffer(FILE *f) {
     // get the file into a buffer
     char *buffer = malloc(sizeof(char));;
     int i = 0;
-    char c;
 
     while ((buffer[i] = fgetc(f)) != EOF) {
         i++;
         buffer = realloc(buffer, (i+1) * sizeof(char));
     }
     buffer[i] = '\0';
+    return buffer;
 }
 
 // ---------- SIMPLE TABLE FUNCTIONS -----------
@@ -255,14 +261,10 @@ void deleteCol(Table *table) {
 // Returns program state
 // Expects an empty table
 State readTable(Table *table, FILE *f, char *delimiters) {
-    // default delimiters
-    char *defaultDelimiters = " ";
-    if (delimiters == NULL)
-        delimiters = defaultDelimiters;
     // set the table's main delimiter
     table->delim = delimiters[0];
 
-    fileBuffer = fileToBuffer(f);
+    char *fileBuffer = fileToBuffer(f);
 
     // current row and column
     unsigned row=0, col=0;
@@ -275,6 +277,10 @@ State readTable(Table *table, FILE *f, char *delimiters) {
         // +1 to skip the delimiter
         i += shift + 1;
 
+        // if there is nothing left
+        if (fileBuffer[i-1] == '\0')
+            break;
+
         // write to table
         if (col >= table->cols)
             addCol(table);
@@ -284,9 +290,6 @@ State readTable(Table *table, FILE *f, char *delimiters) {
 
         writeCell(&table->cells[row][col], cellBuffer);
 
-        if (fileBuffer[i-1] == '\0') {
-            break;
-
         if (fileBuffer[i-1] == '\n') {
             // end of line
             row++;
@@ -294,7 +297,7 @@ State readTable(Table *table, FILE *f, char *delimiters) {
             continue;
         }
 
-        if (strchr(delimiters, fileBuffer[i-1]))
+        if (strchr(delimiters, fileBuffer[i-1])) {
             // delimiter
             col++;
             continue;
@@ -310,7 +313,7 @@ State readTable(Table *table, FILE *f, char *delimiters) {
 void printTable(Table *table, FILE *f) {
     for (unsigned i=0; i < table->rows; i++) {
         for (unsigned j=0; j < table->cols; j++) {
-            printCell(&table->cells[i][j], f);
+            printCell(table, &table->cells[i][j], f);
 
             if (j < table->cols - 1)
                 fputc(table->delim, f);
@@ -320,6 +323,10 @@ void printTable(Table *table, FILE *f) {
     }
 }
 
+State executeCommands(Table *table, char* cmdStr) {
+    fprintf(stderr, "commands: %s\n", cmdStr);
+    return SUCCESS;
+}
 
 // reads delimiterrrs from arguments
 State parseArguments(int argc, char **argv, char *delimiters, char *commands, char *filename) {
@@ -437,11 +444,10 @@ int main(int argc, char **argv) {
     // file with table data
     FILE *fp = NULL;
 
-    char delimiters[MAX_DELIMITERS] = ";:";
+    char delimiters[MAX_DELIMITERS] = " ";
     char commands[MAX_COMMAND_LENGTH];
     char filename[MAX_FILENAME_LENGTH];
 
-/*
     if (s == SUCCESS)
         s = parseArguments(argc, argv, delimiters, commands, filename);
 
@@ -450,9 +456,12 @@ int main(int argc, char **argv) {
         if (!fp)
             s = ERR_FILE_ACCESS;
     }
-*/
+
     if (s == SUCCESS)
-        s = readTable(&table, stdin, delimiters);
+        s = readTable(&table, fp, delimiters);
+
+    if (s == SUCCESS)
+        s = executeCommands(&table, commands);
 
     if (s == SUCCESS)
         printTable(&table, stdout);
