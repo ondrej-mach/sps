@@ -9,7 +9,7 @@
 #include <string.h>
 #include <stdbool.h>
 
-#define NUM_COMMANDS 25
+#define NUM_KNOWN_COMMANDS 25
 #define MAX_CELL_LENGTH 1001
 #define MAX_COMMAND_LENGTH 1001
 #define MAX_FILENAME_LENGTH 1001
@@ -56,27 +56,38 @@ typedef enum {
     ERR_MEMORY
 } State;
 
-// categorizes every command
-// program has to know which commands can be combined
-typedef enum {
-    DATA,
-    LAYOUT,
-} TypeOfCommand;
+// Everything, that commands might have access to
+// is easier to extend, when a command needs something special
+typedef struct {
+    Table *table;
+    // arguments ot the command itself
+    char *argStr;
+} Context;
 
 // always go together, easier to pass around
 typedef struct {
-    char name[16];
-    int numParameters;
-    bool hasStringParameter;
-    TypeOfCommand type;
-    // pointer for every function separately
-    // what a perfect opportunity for union
-    State (*fnZero)(Table*);
-    State (*fnOne)(Table*, int);
-    State (*fnTwo)(Table*, int, int);
-    // function with one integer argument and one string
-    State (*fnOneStr)(Table*, int, char*);
+    // categorizes every command
+    enum {
+        SELECTION,
+        LAYOUT,
+        DATA,
+        VARIABLE,
+        SEQUENCE,
+        NONE,
+    } type;
+    // SELECTION commands are a mess
+    // they do not use the name
+    char name[16]; // TODO test if it works without size
+    State (*fn)(Context);
+
+    char *argStr;
 } Command;
+
+typedef struct {
+    size_t len;
+    // dynamic array with commands
+    Command * cmds;
+} Program;
 
 // ---------- CELL FUNCTIONS -----------
 
@@ -120,6 +131,37 @@ void printCell(Table *table, Cell *cell, FILE *f) {
     fprintf(f, "%s", buffer);
 }
 
+// ---------- PROGRAM FUNCTIONS ------------
+
+// initializes the program structure
+State program_ctor(Program *prog) {
+    prog->len = 0;
+    prog->commands = NULL;
+    return SUCCESS;
+}
+
+// deallocates the program structure
+void program_dtor(Program *prog) {
+    for (size_t i; i<prog.len; i++) {
+        free(prog.cmds[i].argStr);
+    }
+    free(prog.cmds);
+}
+
+// appends a command to the program structure
+State addCommand(Program *prog, Command *cmd) {
+    prog.len++;
+
+    Commands *p = realloc(prog->cmds, prog->len);
+    if (p == NULL)
+        return ERR_MEMORY;
+    prog->cmds = p;
+
+    prog->cmds[prog.len] = *cmd;
+    prog->cmds[prog.len].argStr = NULL;
+
+}
+
 // ---------- STRING FUNCTIONS ------------
 
 // gets rid of all the escape characters
@@ -136,8 +178,13 @@ size_t parseString(char *dst, char *src, char *delims) {
             continue;
         }
         // only first character can start quoted cell
-        if ((src[srcIndex] == '\"') && (srcIndex == 0) && !isEscaped) {
-            isQuoted = !isQuoted;
+        if ((src[srcIndex] == '\"') && (srcIndex == 0)) {
+            isQuoted = true;
+            continue;
+        }
+        // ending quotation
+        if ((src[srcIndex] == '\"') && !isEscaped && isQuoted) {
+            isQuoted = false;
             continue;
         }
         // if scanned character is delimiter
@@ -175,6 +222,12 @@ char *fileToBuffer(FILE *f) {
     }
     buffer[i] = '\0';
     return buffer;
+}
+
+// checks if the first string begins with the second
+int strbgn(const char *str, const char *substr) {
+    size_t len = strlen(substr);
+    return memcmp(str, substr, lenpre);
 }
 
 // ---------- SIMPLE TABLE FUNCTIONS -----------
@@ -252,9 +305,8 @@ void deleteCol(Table *table) {
     table->cols--;
 }
 
-// ---------- SAFE FUNCTIONS -----------
+// ---------- INTERFACE FUNCTIONS -----------
 // these functions are interface between raw data and command functions
-// they do not take Cell type arguments
 // all addresses are in range from 1
 
 // make sure, that the coordinates up to these can be accessed
@@ -275,6 +327,15 @@ State assureTableSize(Table *table, unsigned rows, unsigned cols) {
     return SUCCESS;
 }
 
+// ---------- COMMAND FUNCTIONS -----------
+// the functions, that execute the actual commands
+
+State irow_cmd(CommandParameter p) {
+
+    return SUCCESS;
+}
+
+
 // ---------- MORE COMPLEX FUNCTIONS -----------
 
 // Reads table from stdin and saves it into the table structure
@@ -286,6 +347,9 @@ State readTable(Table *table, FILE *f, char *delimiters) {
     table->delim = delimiters[0];
 
     char *fileBuffer = fileToBuffer(f);
+    if (fileBuffer == NULL)
+        return ERR_MEMORY;
+
     State s = SUCCESS;
     // current row and column
     unsigned row=0, col=0;
@@ -341,12 +405,61 @@ void printTable(Table *table, FILE *f) {
     }
 }
 
-State executeCommands(Table *table, char* cmdStr) {
-    fprintf(stderr, "commands: %s\n", cmdStr);
+State parseCommands(char *cmdStr, Program *prog) {
+    // command delimiters
+    const char *delims = ";";
+    Command knownCommands[NUM_KNOWN_COMMANDS] = {
+        {.type=LAYOUT, .name="irow", .fn=irow_cmd},
+        {.type=LAYOUT, .name="irow", .fn=irow_cmd}
+
+    };
+
+    // where is the reading on
+    int strIndex=0;
+
+    while (true) {
+        bool found = false;
+        Command *p = realloc()
+
+        // first, check, if the command is SELECTION
+        // these can be written with weird syntax, when they start with '['
+        //if (cmdStr[i] == '[') {}
+
+        for (int j=0; j<NUM_KNOWN_COMMANDS; j++) {
+            // if the command is found at the beginning of current index
+            if (strbgn(&cmdStr[i], knownCommands[j].name) == 0) {
+                commands[cmdIndex] = knownCommands[j];
+                break;
+            }
+        }
+        char cmdBuf[MAX_COMMAND_LENGTH];
+        // this might cause some issues later, now commands can be in
+        // quotation marks and escaping is allowed
+        size_t shift = parseString(cmdBuf, cmdStr, delims);
+        // +1 to skip the delimiter
+        i += shift + 1;
+
+        // if there is delimiter, there maust be another command
+        if (fileBuffer[i-1] == ';');
+            continue;
+
+        // if there is nothing left
+        if (fileBuffer[i-1] == '\0')
+            break;
+    }
     return SUCCESS;
 }
 
-// reads delimiterrrs from arguments
+State executeCommands(Table *table, Command *commands) {
+    for (int i=0; commands[i].type != STOP; i++) {
+        commands[i].param.table = table;
+        commands[i].fn(commands[i].param);
+
+    }
+    return SUCCESS;
+}
+
+// reads delimiters from arguments
 State parseArguments(int argc, char **argv, char *delimiters, char *commands, char *filename) {
     // in case nothing is found
     strcpy(delimiters, " ");
@@ -357,6 +470,10 @@ State parseArguments(int argc, char **argv, char *delimiters, char *commands, ch
     if (strcmp("-d", argv[i]) == 0) {
         if (++i >= argc)
             return ERR_BAD_SYNTAX;
+
+        delimiters = malloc(strlen(argv[i]) + 1);
+        if (delimiters == NULL)
+            return ERR_MEMORY;
 
         strcpy(delimiters, argv[i]);
         if (++i >= argc)
@@ -373,18 +490,27 @@ State parseArguments(int argc, char **argv, char *delimiters, char *commands, ch
         if (!fp)
             return ERR_FILE_ACCESS;
 
-        fscanf(fp, "%1000s", commands);
-        fclose(fp);
+        commands = fileToBuffer(fp);
+        if (commands == NULL)
+            return ERR_MEMORY;
 
         if (++i >= argc)
             return ERR_BAD_SYNTAX;
     } else {
         // reading commands from the argument
+        commands = malloc(strlen(argv[i]) + 1);
+        if (commands == NULL)
+            return ERR_MEMORY;
+
         strcpy(commands, argv[i]);
 
         if (++i >= argc)
             return ERR_BAD_SYNTAX;
     }
+
+    filename = malloc(strlen(argv[i]) + 1);
+    if (commands == NULL)
+        return ERR_MEMORY;
 
     strcpy(filename, argv[i]);
 
@@ -461,22 +587,36 @@ int main(int argc, char **argv) {
     // file with table data
     FILE *fp = NULL;
 
-    char delimiters[MAX_DELIMITERS] = " ";
-    char commands[MAX_COMMAND_LENGTH];
-    char filename[MAX_FILENAME_LENGTH];
+    char *delimiters = NULL;
+    char *filename = NULL;
+    // all the commands in one string
+    char *commandsString = NULL;
+    // all the commands in dynamic array of Command objects
+    // this can be directly executed
+    Program program;
+    program_ctor(program);
 
     if (s == SUCCESS)
-        s = parseArguments(argc, argv, delimiters, commands, filename);
+        s = parseArguments(argc, argv, delimiters, commandsString, filename);
 
+    // parse the commands, so the memory can be freed
+    if (s == SUCCESS)
+        s = parseCommands(commandsString, commands);
+    free(commandsString);
+
+    // open the file where the table is stored
     if (s == SUCCESS) {
         fp = fopen(filename, "r+");
         if (!fp)
             s = ERR_FILE_ACCESS;
     }
 
+    // reading the table
     if (s == SUCCESS)
         s = readTable(&table, fp, delimiters);
+    free(delimiters);
 
+    // executing commands
     if (s == SUCCESS)
         s = executeCommands(&table, commands);
 
