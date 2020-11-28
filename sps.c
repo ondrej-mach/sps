@@ -59,10 +59,8 @@ typedef enum {
 // categorizes every command
 // program has to know which commands can be combined
 typedef enum {
-    NOT_SET = 0,
     DATA,
     LAYOUT,
-    SELECTION,
 } TypeOfCommand;
 
 // always go together, easier to pass around
@@ -254,6 +252,29 @@ void deleteCol(Table *table) {
     table->cols--;
 }
 
+// ---------- SAFE FUNCTIONS -----------
+// these functions are interface between raw data and command functions
+// they do not take Cell type arguments
+// all addresses are in range from 1
+
+// make sure, that the coordinates up to these can be accessed
+State assureTableSize(Table *table, unsigned rows, unsigned cols) {
+    State s = SUCCESS;
+    // Add columns to table, until they at least match
+    while (cols >= table->cols) {
+        s = addCol(table);
+        if (s != SUCCESS)
+            return s;
+    }
+    // Do the same for rows
+    while (rows >= table->rows) {
+        s = addRow(table);
+        if (s != SUCCESS)
+            return s;
+    }
+    return SUCCESS;
+}
+
 // ---------- MORE COMPLEX FUNCTIONS -----------
 
 // Reads table from stdin and saves it into the table structure
@@ -265,12 +286,11 @@ State readTable(Table *table, FILE *f, char *delimiters) {
     table->delim = delimiters[0];
 
     char *fileBuffer = fileToBuffer(f);
-
+    State s = SUCCESS;
     // current row and column
     unsigned row=0, col=0;
-    // points at current character
-
     size_t i = 0;
+
     while (true) {
         char cellBuffer[MAX_CELL_LENGTH];
         size_t shift = parseString(cellBuffer, &fileBuffer[i], delimiters);
@@ -282,23 +302,21 @@ State readTable(Table *table, FILE *f, char *delimiters) {
             break;
 
         // write to table
-        if (col >= table->cols)
-            addCol(table);
+        s = assureTableSize(table, row, col);
+        if (s != SUCCESS)
+            return s;
 
-        if (row >= table->rows)
-            addRow(table);
-
-        writeCell(&table->cells[row][col], cellBuffer);
+        s = writeCell(&table->cells[row][col], cellBuffer);
+        if (s != SUCCESS)
+            return s;
 
         if (fileBuffer[i-1] == '\n') {
-            // end of line
             row++;
             col = 0;
             continue;
         }
 
         if (strchr(delimiters, fileBuffer[i-1])) {
-            // delimiter
             col++;
             continue;
         }
@@ -377,7 +395,6 @@ State parseArguments(int argc, char **argv, char *delimiters, char *commands, ch
 
     return SUCCESS;
 }
-
 
 // prints basic help on how to use the program
 void printUsage() {

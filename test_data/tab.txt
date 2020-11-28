@@ -1,4 +1,4 @@
-Nazev:Hodnota:Random string
-pi:3.1415:Hello there
+Nazev:Hodnota:"Random string"
+pi:3.1415:"Hello there"
 e:2.1728:General
 phi:1.61:Kenobi
