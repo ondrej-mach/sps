@@ -38,6 +38,16 @@ typedef struct {
     char delim;
 } Table;
 
+// struct for table
+// stores only one main delimiter
+// others get replaced while reading the table
+typedef struct {
+    // variables _0 to _9
+    Cell cellVars[10];
+    // Selection variable _
+    Selection selVar;
+} Variables;
+
 // all program states
 // these are returned by most functions that can fail in any way
 typedef enum {
@@ -62,6 +72,9 @@ typedef struct {
     Table *table;
     // arguments ot the command itself
     char *argStr;
+    Variables *vars;
+    // be very careful, this influences the flow of the program
+    unsigned *seqPtr;
 } Context;
 
 // struct for all the commands
@@ -85,6 +98,10 @@ typedef struct {
     char *filename;
     char *commandString;
 } Arguments;
+
+// ---------- FUNCTION PROTOTYPES ------------
+
+void printTable(Table *table, FILE *f);
 
 // ---------- STRING FUNCTIONS ------------
 
@@ -154,12 +171,25 @@ int strbgn(const char *str, const char *substr) {
     return memcmp(str, substr, len);
 }
 
+// ---------- OTHER FUNCTIONS ------------
+
+// initializes the selection to default values
+void selection_init(Selection *sel) {
+    sel->startRow = 1;
+    sel->startCol = 1;
+    sel->endRow = 1;
+    sel->endCol = 1;
+}
+
 // ---------- CELL FUNCTIONS -----------
 
 // constructs a new empty cell
-void cell_ctor(Cell *cell) {
+State cell_ctor(Cell *cell) {
     // only the termination character
     cell->str = calloc(1, sizeof(char));
+    if (cell->str == NULL)
+        return ERR_MEMORY;
+    return SUCCESS;
 }
 
 // destructs a cell
@@ -170,13 +200,37 @@ void cell_dtor(Cell *cell) {
 
 // writes chars from buffer into a cell
 State writeCell(Cell *cell, char *src) {
-    char *p = realloc(cell->str, strlen(src)+1);
-    if (p)
-        cell->str = p;
-    else
+    free(cell->str);
+    cell->str = malloc((strlen(src) + 1) * sizeof(char));
+    if (cell->str == NULL)
         return ERR_MEMORY;
 
     strcpy(cell->str, src);
+    return SUCCESS;
+}
+
+// writes chars from buffer into a cell
+State deepCopyCell(Cell *dst, Cell *src) {
+    return writeCell(dst, src->str);
+}
+
+// writes chars from buffer into a cell
+State swapCell(Cell *c1, Cell *c2) {
+    Cell tmp;
+    State s = SUCCESS;
+
+    s = cell_ctor(&tmp);
+
+    if (s == SUCCESS)
+        s = deepCopyCell(&tmp, c2);
+
+    if (s == SUCCESS)
+        s = deepCopyCell(c2, c1);
+
+    if (s == SUCCESS)
+        s = deepCopyCell(c1, &tmp);
+
+    cell_dtor(&tmp);
     return SUCCESS;
 }
 
@@ -207,7 +261,7 @@ State program_ctor(Program *prog) {
 
 // deallocates the program structure
 void program_dtor(Program *prog) {
-    for (size_t i; i < prog->len; i++) {
+    for (size_t i=0; i < prog->len; i++) {
         free(prog->cmds[i].argStr);
     }
     free(prog->cmds);
@@ -311,6 +365,28 @@ State parseArguments(int argc, char **argv, Arguments *args) {
     return SUCCESS;
 }
 
+// ---------- VARIABLES FUNCTIONS -----------
+
+State variables_ctor(Variables *v) {
+    State s = SUCCESS;
+    selection_init(&v->selVar);
+
+    const int num = sizeof(v->cellVars) / sizeof(Cell);
+    for (int i=0; i<num; i++) {
+        s = cell_ctor(&v->cellVars[i]);
+        if (s != SUCCESS)
+            break;
+    }
+    return s;
+}
+
+void variables_dtor(Variables *v) {
+    const int num = sizeof(v->cellVars) / sizeof(Cell);
+    for (int i=0; i<num; i++) {
+        cell_dtor(&v->cellVars[i]);
+    }
+}
+
 // ---------- SIMPLE TABLE FUNCTIONS -----------
 
 // constructs a new empty table
@@ -411,16 +487,29 @@ State assureTableSize(Table *table, unsigned rows, unsigned cols) {
 // ---------- COMMAND FUNCTIONS -----------
 // the functions, that execute the actual commands
 
+State test_cmd(Context ctx) {
+    fprintf(stderr, "test executed with arguments '%s'\n", ctx.argStr);
+    return SUCCESS;
+}
+
+State print_cmd(Context ctx) {
+    printTable(ctx.table, stderr);
+    return SUCCESS;
+}
+
 State irow_cmd(Context ctx) {
-    printf("irow executed with arguments '%s'\n", ctx.argStr);
+    if (strcmp(ctx.argStr, ""))
+        return ERR_BAD_SYNTAX;
+
     return SUCCESS;
 }
 
 State arow_cmd(Context ctx) {
-    printf("arow executed with arguments '%s'\n", ctx.argStr);
+    if (strcmp(ctx.argStr, ""))
+        return ERR_BAD_SYNTAX;
+
     return SUCCESS;
 }
-
 
 // ---------- MORE COMPLEX FUNCTIONS -----------
 
@@ -495,6 +584,8 @@ State parseCommands(Program *prog, char *cmdStr) {
     // command delimiters
     char *delims = ";";
     Command knownCommands[] = {
+        {.name="test", .fn=test_cmd}, // TODO delete later?
+        {.name="print", .fn=print_cmd},
         {.name="irow", .fn=irow_cmd},
         {.name="arow", .fn=arow_cmd}
     };
@@ -522,25 +613,26 @@ State parseCommands(Program *prog, char *cmdStr) {
         }
         if (!found)
             return ERR_BAD_COMMANDS;
-
-        char cmdBuf[MAX_COMMAND_LENGTH];
+        // buffer for command's arguments
+        char argBuf[MAX_COMMAND_LENGTH];
         // this might cause some issues later, now commands can be in
         // quotation marks and escaping is allowed
-        size_t shift = parseString(cmdBuf, cmdStr, delims);
-        prog->cmds->argStr = malloc((strlen(cmdBuf) + 1) * sizeof(char));
-        if (prog->cmds->argStr == NULL)
+        size_t shift = parseString(argBuf, &cmdStr[strIndex], delims);
+        // to make the next line cleaner
+        Command *lastCmdPtr = &prog->cmds[prog->len - 1];
+        lastCmdPtr->argStr = malloc((strlen(argBuf) + 1) * sizeof(char));
+        if (lastCmdPtr->argStr == NULL)
             return ERR_MEMORY;
-        strcpy(prog->cmds->argStr, cmdBuf);
+        strcpy(lastCmdPtr->argStr, argBuf);
 
-        strIndex += shift;
+        // +1 to skip the delimiter
+        strIndex += shift + 1;
         // if there is delimiter, there maust be another command
-        if (cmdBuf[strIndex] == ';')
+        if (cmdStr[strIndex-1] == ';')
             continue;
         // if there is nothing left
-        if (cmdBuf[strIndex] == '\0')
+        if (cmdStr[strIndex-1] == '\0')
             break;
-        // +1 to skip the delimiter
-        strIndex++;
     }
     return SUCCESS;
 }
@@ -548,8 +640,11 @@ State parseCommands(Program *prog, char *cmdStr) {
 State executeProgram(Program *prog, Table *table) {
     State s;
     State (*function)(Context);
+
+    Variables variables;
+    variables_ctor(&variables);
     // set context, that doesn't change with each command
-    Context context = {.table=table};
+    Context context = {.table=table, .vars=&variables};
 
     for (size_t i=0; i < prog->len; i++) {
         // set the correct function
@@ -559,9 +654,10 @@ State executeProgram(Program *prog, Table *table) {
 
         s = function(context);
         if (s != SUCCESS)
-            return s;
+            break;
     }
-    return SUCCESS;
+    variables_dtor(&variables);
+    return s;
 }
 
 // prints basic help on how to use the program
@@ -662,13 +758,14 @@ int main(int argc, char **argv) {
     if (s == SUCCESS)
         s = executeProgram(&program, &table);
 
-    if (s == SUCCESS)
-        printTable(&table, stdout);
+    // TODO uncomment to change the actual table
+    // if (s == SUCCESS)
+    //     printTable(&table, fp);
 
     // if file is opened, close it
     if (fp)
         fclose(fp);
-
+    program_dtor(&program);
     table_dtor(&table);
     printErrorMessage(s);
     return s;
