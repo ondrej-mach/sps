@@ -9,7 +9,6 @@
 #include <string.h>
 #include <stdbool.h>
 
-#define NUM_KNOWN_COMMANDS 25
 #define MAX_CELL_LENGTH 1001
 #define MAX_COMMAND_LENGTH 1001
 #define MAX_FILENAME_LENGTH 1001
@@ -67,8 +66,8 @@ typedef struct {
 
 // struct for all the commands
 typedef struct {
-    // name is not used when executing
-    char name[16]; // TODO test if it works without size
+    // name is used only for parsing
+    char name[16];
     State (*fn)(Context);
     // only used when executing
     char *argStr;
@@ -80,6 +79,80 @@ typedef struct {
     // dynamic array with commands
     Command *cmds;
 } Program;
+
+typedef struct {
+    char *delimiters;
+    char *filename;
+    char *commandString;
+} Arguments;
+
+// ---------- STRING FUNCTIONS ------------
+
+// gets rid of all the escape characters
+// quotation marks etc.
+// returns how many characters in original string were parsed
+size_t parseString(char *dst, char *src, char *delims) {
+    int srcIndex = 0, dstIndex = 0;
+    bool isQuoted = false, isEscaped = false;
+
+    for (; src[srcIndex] != '\0'; srcIndex++) {
+        // if escape character
+        if ((src[srcIndex] == '\\') && !isEscaped) {
+            isEscaped = true;
+            continue;
+        }
+        // only first character can start quoted cell
+        if ((src[srcIndex] == '\"') && (srcIndex == 0)) {
+            isQuoted = true;
+            continue;
+        }
+        // ending quotation
+        if ((src[srcIndex] == '\"') && !isEscaped && isQuoted) {
+            isQuoted = false;
+            continue;
+        }
+        // if scanned character is delimiter
+        if (strchr(delims, src[srcIndex]) && !isEscaped && !isQuoted)
+            break;
+        // check for \n is after check for escape character
+        // it is the only character, that cannot be escaped
+        if (src[srcIndex] == '\n')  {
+            // it is illegal to escape or quote '\n'
+            if (isEscaped || isQuoted)
+                return 0;
+            break;
+        }
+        // if there is nothing special about the characters
+        // write it into the buffer
+        dst[dstIndex] = src[srcIndex];
+        isEscaped = false;
+        dstIndex++;
+    }
+    if (isQuoted)
+        return 0;
+
+    dst[dstIndex] = '\0';
+    return srcIndex;
+}
+
+char *fileToBuffer(FILE *f) {
+    // get the file into a buffer
+    char *buffer = malloc(sizeof(char));;
+    int i = 0;
+
+    while ((buffer[i] = fgetc(f)) != EOF) {
+        i++;
+        buffer = realloc(buffer, (i+1) * sizeof(char));
+    }
+    buffer[i] = '\0';
+    return buffer;
+}
+
+// checks if the first string begins with the second
+int strbgn(const char *str, const char *substr) {
+    size_t len = strlen(substr);
+    return memcmp(str, substr, len);
+}
 
 // ---------- CELL FUNCTIONS -----------
 
@@ -151,81 +224,91 @@ State addCommand(Program *prog, Command *cmd) {
     prog->cmds = p;
 
     size_t last = prog->len - 1;
-    // the name is not copied, because it is not needed for running
+    // the name is not needed for running, copied just for debugging purposes
+    strcpy(prog->cmds[last].name, cmd->name);
     prog->cmds[last].fn = cmd->fn;
-    prog->cmds[last].argStr = malloc(sizeof(char) * strlen(cmd->argStr));
-    if (prog->cmds[last].argStr)
-        return ERR_MEMORY;
-    strcpy(prog->cmds[last].argStr, cmd->argStr);
+    // not set yet
+    prog->cmds[last].argStr = NULL;
     return SUCCESS;
 }
 
-// ---------- STRING FUNCTIONS ------------
+// ---------- ARGUMENTS FUNCTIONS ------------
 
-// gets rid of all the escape characters
-// quotation marks etc.
-// returns how many characters in original string were parsed
-size_t parseString(char *dst, char *src, char *delims) {
-    int srcIndex = 0, dstIndex = 0;
-    bool isQuoted = false, isEscaped = false;
-
-    for (; src[srcIndex] != '\0'; srcIndex++) {
-        // if escape character
-        if ((src[srcIndex] == '\\') && !isEscaped) {
-            isEscaped = true;
-            continue;
-        }
-        // only first character can start quoted cell
-        if ((src[srcIndex] == '\"') && (srcIndex == 0)) {
-            isQuoted = true;
-            continue;
-        }
-        // ending quotation
-        if ((src[srcIndex] == '\"') && !isEscaped && isQuoted) {
-            isQuoted = false;
-            continue;
-        }
-        // if scanned character is delimiter
-        if (strchr(delims, src[srcIndex]) && !isEscaped && !isQuoted)
-            break;
-        // check for \n is after check for escape character
-        // it is the only character, that cannot be escaped
-        if (src[srcIndex] == '\n')  {
-            // it is illegal to escape or quote '\n'
-            if (isEscaped || isQuoted)
-                return 0;
-            break;
-        }
-        // if there is nothing special about the characters
-        // write it into the buffer
-        dst[dstIndex] = src[srcIndex];
-        isEscaped = false;
-        dstIndex++;
-    }
-    if (isQuoted)
-        return 0;
-
-    dst[dstIndex] = '\0';
-    return srcIndex;
+// TODO might not be needed
+State arguments_ctor(Arguments *args) {
+    args->delimiters = NULL;
+    args->filename = NULL;
+    args->commandString = NULL;
+    return SUCCESS;
 }
 
-char *fileToBuffer(FILE *f) {
-    // get the file into a buffer
-    char *buffer = malloc(sizeof(char));;
-    int i = 0;
 
-    while ((buffer[i] = fgetc(f)) != EOF) {
-        i++;
-        buffer = realloc(buffer, (i+1) * sizeof(char));
+// reads delimiters from arguments
+State parseArguments(int argc, char **argv, Arguments *args) {
+    if (argc < 2)
+        return ERR_BAD_SYNTAX;
+
+    int i = 1;
+    // reading delimiters
+    if (strcmp("-d", argv[i]) == 0) {
+        if (++i >= argc)
+            return ERR_BAD_SYNTAX;
+
+        args->delimiters = malloc(strlen(argv[i]) + 1);
+        if (args->delimiters == NULL)
+            return ERR_MEMORY;
+
+        strcpy(args->delimiters, argv[i]);
+        if (++i >= argc)
+            return ERR_BAD_SYNTAX;
+    } else {
+        args->delimiters = malloc(2 * sizeof(char));
+        if (args->delimiters == NULL)
+            return ERR_MEMORY;
+
+        strcpy(args->delimiters, " ");
     }
-    buffer[i] = '\0';
-    return buffer;
-}
 
-// checks if the first string begins with the second
-int strbgn(const char *str, const char *substr) {
-    size_t len = strlen(substr);
-    return memcmp(str, substr, len);
+    // reading commands from file
+    if (strcmp("-c", argv[i]) == 0) {
+        if (++i >= argc)
+            return ERR_BAD_SYNTAX;
+
+        // file with commands
+        FILE *fp = fopen(argv[i], "r");
+        if (!fp)
+            return ERR_FILE_ACCESS;
+
+        args->commandString = fileToBuffer(fp);
+        if (args->commandString == NULL)
+            return ERR_MEMORY;
+
+        if (++i >= argc)
+            return ERR_BAD_SYNTAX;
+    } else {
+        // reading commands from the argument
+        args->commandString = malloc(strlen(argv[i]) + 1);
+        if (args->commandString == NULL)
+            return ERR_MEMORY;
+
+        strcpy(args->commandString, argv[i]);
+
+        if (++i >= argc)
+            return ERR_BAD_SYNTAX;
+    }
+
+    args->filename = malloc(strlen(argv[i]) + 1);
+    if (args->filename == NULL)
+        return ERR_MEMORY;
+
+    strcpy(args->filename, argv[i]);
+
+    // if there are any arguments left at this point,
+    // the syntax must be wrong
+    if (i < argc-1)
+        return ERR_BAD_SYNTAX;
+
+    return SUCCESS;
 }
 
 // ---------- SIMPLE TABLE FUNCTIONS -----------
@@ -329,7 +412,12 @@ State assureTableSize(Table *table, unsigned rows, unsigned cols) {
 // the functions, that execute the actual commands
 
 State irow_cmd(Context ctx) {
-    printf("irow executed\n");
+    printf("irow executed with arguments '%s'\n", ctx.argStr);
+    return SUCCESS;
+}
+
+State arow_cmd(Context ctx) {
+    printf("arow executed with arguments '%s'\n", ctx.argStr);
     return SUCCESS;
 }
 
@@ -406,10 +494,11 @@ void printTable(Table *table, FILE *f) {
 State parseCommands(Program *prog, char *cmdStr) {
     // command delimiters
     char *delims = ";";
-    Command knownCommands[NUM_KNOWN_COMMANDS] = {
+    Command knownCommands[] = {
         {.name="irow", .fn=irow_cmd},
-        {.name="irow", .fn=irow_cmd}
+        {.name="arow", .fn=arow_cmd}
     };
+    const int NUM_KNOWN_CMDS = sizeof(knownCommands) / sizeof(Command);
     // the imaginary reading head of cmdStr
     int strIndex=0;
 
@@ -421,7 +510,7 @@ State parseCommands(Program *prog, char *cmdStr) {
 
         // check for command
         if (!found) {
-            for (int j=0; j<NUM_KNOWN_COMMANDS; j++) {
+            for (int j=0; j < NUM_KNOWN_CMDS; j++) {
                 // if the command is found at the beginning of current index
                 if (strbgn(&cmdStr[strIndex], knownCommands[j].name) == 0) {
                     strIndex += strlen(knownCommands[j].name);
@@ -431,7 +520,6 @@ State parseCommands(Program *prog, char *cmdStr) {
                 }
             }
         }
-
         if (!found)
             return ERR_BAD_COMMANDS;
 
@@ -439,96 +527,40 @@ State parseCommands(Program *prog, char *cmdStr) {
         // this might cause some issues later, now commands can be in
         // quotation marks and escaping is allowed
         size_t shift = parseString(cmdBuf, cmdStr, delims);
-        // +1 to skip the delimiter
-        strIndex += shift + 1;
+        prog->cmds->argStr = malloc((strlen(cmdBuf) + 1) * sizeof(char));
+        if (prog->cmds->argStr == NULL)
+            return ERR_MEMORY;
+        strcpy(prog->cmds->argStr, cmdBuf);
 
+        strIndex += shift;
         // if there is delimiter, there maust be another command
-        if (cmdBuf[strIndex-1] == ';')
+        if (cmdBuf[strIndex] == ';')
             continue;
-
         // if there is nothing left
-        if (cmdBuf[strIndex-1] == '\0')
+        if (cmdBuf[strIndex] == '\0')
             break;
+        // +1 to skip the delimiter
+        strIndex++;
     }
     return SUCCESS;
 }
 
 State executeProgram(Program *prog, Table *table) {
-    Context context = {.table=table};
     State s;
     State (*function)(Context);
+    // set context, that doesn't change with each command
+    Context context = {.table=table};
 
-    for (size_t i=0; i < prog->len ; i++) {
-        context.argStr = prog->cmds[i].argStr;
+    for (size_t i=0; i < prog->len; i++) {
+        // set the correct function
         function = prog->cmds[i].fn;
+        // set up the context before executing
+        context.argStr = prog->cmds[i].argStr;
 
         s = function(context);
         if (s != SUCCESS)
             return s;
     }
-    return SUCCESS;
-}
-
-// reads delimiters from arguments
-State parseArguments(int argc, char **argv, char *delimiters, char *commands, char *filename) {
-    // in case nothing is found
-    strcpy(delimiters, " ");
-
-    int i = 1;
-
-    // reading delimiters
-    if (strcmp("-d", argv[i]) == 0) {
-        if (++i >= argc)
-            return ERR_BAD_SYNTAX;
-
-        delimiters = malloc(strlen(argv[i]) + 1);
-        if (delimiters == NULL)
-            return ERR_MEMORY;
-
-        strcpy(delimiters, argv[i]);
-        if (++i >= argc)
-            return ERR_BAD_SYNTAX;
-    }
-
-    // reading commands from file
-    if (strcmp("-c", argv[i]) == 0) {
-        if (++i >= argc)
-            return ERR_BAD_SYNTAX;
-
-        // file with commands
-        FILE *fp = fopen(argv[i], "r");
-        if (!fp)
-            return ERR_FILE_ACCESS;
-
-        commands = fileToBuffer(fp);
-        if (commands == NULL)
-            return ERR_MEMORY;
-
-        if (++i >= argc)
-            return ERR_BAD_SYNTAX;
-    } else {
-        // reading commands from the argument
-        commands = malloc(strlen(argv[i]) + 1);
-        if (commands == NULL)
-            return ERR_MEMORY;
-
-        strcpy(commands, argv[i]);
-
-        if (++i >= argc)
-            return ERR_BAD_SYNTAX;
-    }
-
-    filename = malloc(strlen(argv[i]) + 1);
-    if (commands == NULL)
-        return ERR_MEMORY;
-
-    strcpy(filename, argv[i]);
-
-    // if there are any arguments left at this point,
-    // the syntax must be wrong
-    if (i < argc-1)
-        return ERR_BAD_SYNTAX;
-
     return SUCCESS;
 }
 
@@ -597,34 +629,34 @@ int main(int argc, char **argv) {
     // file with table data
     FILE *fp = NULL;
 
-    char *delimiters = NULL;
-    char *filename = NULL;
-    // all the commands in one string
-    char *commandsString = NULL;
+    // all arguments are parsed into this structure
+    Arguments arguments;
+
     // all the commands in dynamic array of Command objects
     // this can be directly executed
     Program program;
     program_ctor(&program);
 
     if (s == SUCCESS)
-        s = parseArguments(argc, argv, delimiters, commandsString, filename);
+        s = parseArguments(argc, argv, &arguments);
 
     // parse the commands, so the memory can be freed
     if (s == SUCCESS)
-        s = parseCommands(&program, commandsString);
-    free(commandsString);
+        s = parseCommands(&program, arguments.commandString);
+    free(arguments.commandString);
 
     // open the file where the table is stored
     if (s == SUCCESS) {
-        fp = fopen(filename, "r+");
+        fp = fopen(arguments.filename, "r+");
         if (!fp)
             s = ERR_FILE_ACCESS;
     }
+    free(arguments.filename);
 
     // reading the table
     if (s == SUCCESS)
-        s = readTable(&table, fp, delimiters);
-    free(delimiters);
+        s = readTable(&table, fp, arguments.delimiters);
+    free(arguments.delimiters);
 
     // executing commands
     if (s == SUCCESS)
