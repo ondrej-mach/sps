@@ -74,7 +74,7 @@ typedef struct {
     char *argStr;
     Variables *vars;
     // be very careful, this influences the flow of the program
-    unsigned *seqPtr;
+    unsigned *execPtr;
 } Context;
 
 // struct for all the commands
@@ -260,7 +260,7 @@ void program_dtor(Program *prog) {
 }
 
 // appends a command to the program structure
-State addCommand(Program *prog, Command *cmd) {
+State addCommand(Program *prog, const Command *cmd) {
     prog->len++;
 
     Command *p = realloc(prog->cmds, sizeof(Command) * prog->len);
@@ -496,7 +496,7 @@ State moveRow(Table *table, unsigned start, unsigned end) {
     start--;
     end--;
 
-    unsigned i=start;
+    unsigned i = start;
 
     int direction;
     if (i < end)
@@ -515,6 +515,35 @@ State moveRow(Table *table, unsigned start, unsigned end) {
     return SUCCESS;
 }
 
+// swap rows of table, user coordinates
+State swapCols(Table *table, unsigned c1, unsigned c2) {
+    // convert to real addressing
+    c1--;
+    c2--;
+    // for each line of the table
+    for (unsigned i=0; i<table->rows; i++) {
+        swapCell(&table->cells[i][c1], &table->cells[i][c2]);
+    }
+    return SUCCESS;
+}
+
+// moves row while shifting the others
+State moveCol(Table *table, unsigned start, unsigned end) {
+    unsigned i = start;
+
+    int direction;
+    if (i < end)
+        direction = 1;
+    else
+        direction = -1;
+
+    while (i != end) {
+        swapCols(table, i, i + direction);
+        i += direction;
+    }
+    return SUCCESS;
+}
+
 // ---------- COMMAND FUNCTIONS -----------
 // the functions, that execute the actual commands
 
@@ -525,6 +554,11 @@ State test_cmd(Context ctx) {
 
 State print_cmd(Context ctx) {
     printTable(ctx.table, stderr);
+    return SUCCESS;
+}
+
+State select_cmd(Context ctx) {
+    fprintf(stderr, "select executed with arguments '%s'\n", ctx.argStr);
     return SUCCESS;
 }
 
@@ -589,9 +623,61 @@ State drow_cmd(Context ctx) {
     return s;
 }
 
-State icol_cmd(Context ctx){}
-State acol_cmd(Context ctx){}
-State dcol_cmd(Context ctx){}
+// appends an empty column after selected cells
+State acol_cmd(Context ctx) {
+    if (strcmp(ctx.argStr, ""))
+        return ERR_BAD_SYNTAX;
+
+    State s;
+    s = addCol(ctx.table);
+
+    if (s == SUCCESS) {
+        unsigned start = ctx.table->cols;
+        unsigned end = ctx.table->sel.endCol + 1;
+        s = moveCol(ctx.table, start, end);
+    }
+    return s;
+}
+
+// inserts an empty column left from the selected cells
+State icol_cmd(Context ctx) {
+    if (strcmp(ctx.argStr, ""))
+        return ERR_BAD_SYNTAX;
+
+    State s;
+    s = addCol(ctx.table);
+
+    if (s == SUCCESS) {
+        unsigned start = ctx.table->cols;
+        unsigned end = ctx.table->sel.startCol;
+        s = moveCol(ctx.table, start, end);
+    }
+    return s;
+}
+
+// deletes selected columns
+State dcol_cmd(Context ctx) {
+    if (strcmp(ctx.argStr, ""))
+        return ERR_BAD_SYNTAX;
+
+    State s;
+    // how many lines we need to delete
+    unsigned toDelete = ctx.table->sel.endCol - ctx.table->sel.startCol + 1;
+
+    for (unsigned i=0; i<toDelete; i++) {
+        // move the line to the last place in table
+        unsigned start = ctx.table->sel.startCol;
+        unsigned end = ctx.table->cols;
+        s = moveCol(ctx.table, start, end);
+        if (s != SUCCESS)
+            break;
+        // then delete it
+        deleteRow(ctx.table);
+    }
+    return s;
+}
+
+
 
 // ---------- MORE COMPLEX FUNCTIONS -----------
 
@@ -667,7 +753,9 @@ void printTable(Table *table, FILE *f) {
 State parseCommands(Program *prog, char *cmdStr) {
     // command delimiters
     char *delims = ";";
-    Command knownCommands[] = {
+    // all commands except selection because of their weird syntax
+    const Command knownCommands[] = {
+        // Custom commands (not in official specification)
         {.name="test", .fn=test_cmd}, // TODO delete later?
         {.name="print", .fn=print_cmd},
         // Layout commands
@@ -686,8 +774,13 @@ State parseCommands(Program *prog, char *cmdStr) {
         bool found = false;
         // first, check, if the command is select
         // these can be written with weird syntax, when they start with '['
-        // if (cmdStr[i] == '[') {}
-
+        if (cmdStr[strIndex] == '[') {
+            const Command select = {.fn=select_cmd};
+            addCommand(prog, &select);
+            found = true;
+            // strIndex doesn't even shift
+            // because this is selection's argument
+        }
         // check for command
         if (!found) {
             for (int j=0; j < NUM_KNOWN_CMDS; j++) {
