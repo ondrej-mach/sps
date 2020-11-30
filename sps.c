@@ -34,7 +34,7 @@ typedef struct {
 typedef struct {
     unsigned rows, cols;
     Cell **cells;
-    Selection selection;
+    Selection sel;
     char delim;
 } Table;
 
@@ -217,20 +217,11 @@ State deepCopyCell(Cell *dst, Cell *src) {
 // writes chars from buffer into a cell
 State swapCell(Cell *c1, Cell *c2) {
     Cell tmp;
-    State s = SUCCESS;
+    // shallow copy is enough, pointers will be swapped
+    tmp = *c2;
+    *c2 = *c1;
+    *c1 = tmp;
 
-    s = cell_ctor(&tmp);
-
-    if (s == SUCCESS)
-        s = deepCopyCell(&tmp, c2);
-
-    if (s == SUCCESS)
-        s = deepCopyCell(c2, c1);
-
-    if (s == SUCCESS)
-        s = deepCopyCell(c1, &tmp);
-
-    cell_dtor(&tmp);
     return SUCCESS;
 }
 
@@ -394,6 +385,7 @@ void table_ctor(Table *table) {
     table->rows = 0;
     table->cols = 0;
     table->cells = NULL;
+    selection_init(&table->sel);
 }
 
 // deallocates all the pointers in the table structure
@@ -484,6 +476,45 @@ State assureTableSize(Table *table, unsigned rows, unsigned cols) {
     return SUCCESS;
 }
 
+// swap rows of table, user coordinates
+State swapRows(Table *table, unsigned r1, unsigned r2) {
+    // convert to real addressing
+    r1--;
+    r2--;
+
+    // swap around the pointers
+    Cell *tmp;
+    tmp = table->cells[r2];
+    table->cells[r2] = table->cells[r1];
+    table->cells[r1] = tmp;
+    return SUCCESS;
+}
+
+// moves row while shifting the others
+State moveRow(Table *table, unsigned start, unsigned end) {
+    // convert to real addressing
+    start--;
+    end--;
+
+    unsigned i=start;
+
+    int direction;
+    if (i < end)
+        direction = 1;
+    else
+        direction = -1;
+
+    Cell *tmp = table->cells[start];
+
+    while (i != end) {
+        table->cells[i] = table->cells[i + direction];
+        i += direction;
+    }
+
+    table->cells[end] = tmp;
+    return SUCCESS;
+}
+
 // ---------- COMMAND FUNCTIONS -----------
 // the functions, that execute the actual commands
 
@@ -497,19 +528,70 @@ State print_cmd(Context ctx) {
     return SUCCESS;
 }
 
-State irow_cmd(Context ctx) {
-    if (strcmp(ctx.argStr, ""))
-        return ERR_BAD_SYNTAX;
-
-    return SUCCESS;
-}
-
+// appends a row ofter the lower bound of the selection
 State arow_cmd(Context ctx) {
     if (strcmp(ctx.argStr, ""))
         return ERR_BAD_SYNTAX;
 
-    return SUCCESS;
+    State s;
+    s = addRow(ctx.table);
+
+    if (s == SUCCESS) {
+        // start on the last line
+        unsigned start = ctx.table->rows;
+        // and swap until you get to the lower bound of selection
+        unsigned end = ctx.table->sel.endRow + 1;
+        // move the empty row up to the selection
+        s = moveRow(ctx.table, start, end);
+    }
+    return s;
 }
+
+// TODO could be one function with arow
+// inserts a row right above the selected region
+State irow_cmd(Context ctx) {
+    if (strcmp(ctx.argStr, ""))
+        return ERR_BAD_SYNTAX;
+
+    State s;
+    s = addRow(ctx.table);
+
+    if (s == SUCCESS) {
+        // start on the last line
+        unsigned start = ctx.table->rows;
+        // and swap until you get to the top of selection
+        unsigned end = ctx.table->sel.startRow;
+        // move the empty row up to the selection
+        s = moveRow(ctx.table, start, end);
+    }
+    return s;
+}
+
+// deletes selected rows
+State drow_cmd(Context ctx) {
+    if (strcmp(ctx.argStr, ""))
+        return ERR_BAD_SYNTAX;
+
+    State s;
+    // how many lines we need to delete
+    unsigned toDelete = ctx.table->sel.endRow - ctx.table->sel.startRow + 1;
+
+    for (unsigned i=0; i<toDelete; i++) {
+        // move the line to the last place in table
+        unsigned start = ctx.table->sel.startRow;
+        unsigned end = ctx.table->rows;
+        s = moveRow(ctx.table, start, end);
+        if (s != SUCCESS)
+            break;
+        // then delete it
+        deleteRow(ctx.table);
+    }
+    return s;
+}
+
+State icol_cmd(Context ctx){}
+State acol_cmd(Context ctx){}
+State dcol_cmd(Context ctx){}
 
 // ---------- MORE COMPLEX FUNCTIONS -----------
 
@@ -580,14 +662,21 @@ void printTable(Table *table, FILE *f) {
     }
 }
 
+// takes commands as a string
+// and writes them into the program structure
 State parseCommands(Program *prog, char *cmdStr) {
     // command delimiters
     char *delims = ";";
     Command knownCommands[] = {
         {.name="test", .fn=test_cmd}, // TODO delete later?
         {.name="print", .fn=print_cmd},
+        // Layout commands
         {.name="irow", .fn=irow_cmd},
-        {.name="arow", .fn=arow_cmd}
+        {.name="arow", .fn=arow_cmd},
+        {.name="drow", .fn=drow_cmd},
+        {.name="icol", .fn=icol_cmd},
+        {.name="acol", .fn=acol_cmd},
+        {.name="dcol", .fn=dcol_cmd},
     };
     const int NUM_KNOWN_CMDS = sizeof(knownCommands) / sizeof(Command);
     // the imaginary reading head of cmdStr
@@ -637,6 +726,7 @@ State parseCommands(Program *prog, char *cmdStr) {
     return SUCCESS;
 }
 
+// takes in program structure and executes commands in it
 State executeProgram(Program *prog, Table *table) {
     State s;
     State (*function)(Context);
