@@ -22,6 +22,8 @@ typedef struct {
 
 // selection is always a rectangle
 typedef struct {
+    // every of these can be zero
+    // that means that the selection goes to the end of the table
     unsigned startRow;
     unsigned startCol;
     unsigned endRow;
@@ -454,6 +456,57 @@ void deleteCol(Table *table) {
     table->cols--;
 }
 
+// ---------- SELECTION FUNCTIONS -----------
+// functions don't have to access the data directly
+// program is more extensible this way
+
+unsigned selUpperBound(Table *table) {
+    if (table->sel.startRow == 0) {
+        return 1;
+    }
+    return table->sel.startRow;
+}
+
+unsigned selLowerBound(Table *table) {
+    if (table->sel.endRow == 0) {
+        return table->rows;
+    }
+    return table->sel.endRow;
+}
+
+unsigned selLeftBound(Table *table) {
+    if (table->sel.startCol == 0) {
+        return 1;
+    }
+    return table->sel.startCol;
+}
+
+unsigned selRightBound(Table *table) {
+    if (table->sel.endCol == 0) {
+        return table->cols;
+    }
+    return table->sel.endCol;
+}
+
+// returns NULL if there is more than one cell selcted
+Cell *selectedCell(Table *table) {
+    unsigned row = selUpperBound(table);
+    unsigned col = selLeftBound(table);
+
+    if (row != selLowerBound(table))
+        return NULL;
+
+    if (col != selRightBound(table))
+        return NULL;
+
+    return &table->cells[row-1][col-1];
+}
+
+State selectMinMax(Table *table, bool max) {
+
+    return SUCCESS;
+}
+
 // ---------- INTERFACE FUNCTIONS -----------
 // these functions are interface between raw data and command functions
 // all addresses are in range from 1
@@ -544,6 +597,7 @@ State moveCol(Table *table, unsigned start, unsigned end) {
     return SUCCESS;
 }
 
+
 // ---------- COMMAND FUNCTIONS -----------
 // the functions, that execute the actual commands
 
@@ -559,6 +613,7 @@ State print_cmd(Context ctx) {
 
 State select_cmd(Context ctx) {
     fprintf(stderr, "select executed with arguments '%s'\n", ctx.argStr);
+    //ctx.argStr
     return SUCCESS;
 }
 
@@ -574,7 +629,7 @@ State arow_cmd(Context ctx) {
         // start on the last line
         unsigned start = ctx.table->rows;
         // and swap until you get to the lower bound of selection
-        unsigned end = ctx.table->sel.endRow + 1;
+        unsigned end = selLowerBound(ctx.table) + 1;
         // move the empty row up to the selection
         s = moveRow(ctx.table, start, end);
     }
@@ -594,7 +649,7 @@ State irow_cmd(Context ctx) {
         // start on the last line
         unsigned start = ctx.table->rows;
         // and swap until you get to the top of selection
-        unsigned end = ctx.table->sel.startRow;
+        unsigned end = selUpperBound(ctx.table);
         // move the empty row up to the selection
         s = moveRow(ctx.table, start, end);
     }
@@ -608,11 +663,11 @@ State drow_cmd(Context ctx) {
 
     State s;
     // how many lines we need to delete
-    unsigned toDelete = ctx.table->sel.endRow - ctx.table->sel.startRow + 1;
+    unsigned toDelete = selLowerBound(ctx.table) - selUpperBound(ctx.table) + 1;
 
     for (unsigned i=0; i<toDelete; i++) {
         // move the line to the last place in table
-        unsigned start = ctx.table->sel.startRow;
+        unsigned start = selUpperBound(ctx.table);
         unsigned end = ctx.table->rows;
         s = moveRow(ctx.table, start, end);
         if (s != SUCCESS)
@@ -633,7 +688,7 @@ State acol_cmd(Context ctx) {
 
     if (s == SUCCESS) {
         unsigned start = ctx.table->cols;
-        unsigned end = ctx.table->sel.endCol + 1;
+        unsigned end = selRightBound(ctx.table) + 1;
         s = moveCol(ctx.table, start, end);
     }
     return s;
@@ -649,7 +704,7 @@ State icol_cmd(Context ctx) {
 
     if (s == SUCCESS) {
         unsigned start = ctx.table->cols;
-        unsigned end = ctx.table->sel.startCol;
+        unsigned end = selLeftBound(ctx.table);
         s = moveCol(ctx.table, start, end);
     }
     return s;
@@ -662,22 +717,20 @@ State dcol_cmd(Context ctx) {
 
     State s;
     // how many lines we need to delete
-    unsigned toDelete = ctx.table->sel.endCol - ctx.table->sel.startCol + 1;
+    unsigned toDelete = selRightBound(ctx.table) - selLeftBound(ctx.table) + 1;
 
     for (unsigned i=0; i<toDelete; i++) {
         // move the line to the last place in table
-        unsigned start = ctx.table->sel.startCol;
+        unsigned start = selLeftBound(ctx.table);
         unsigned end = ctx.table->cols;
         s = moveCol(ctx.table, start, end);
         if (s != SUCCESS)
             break;
         // then delete it
-        deleteRow(ctx.table);
+        deleteCol(ctx.table);
     }
     return s;
 }
-
-
 
 // ---------- MORE COMPLEX FUNCTIONS -----------
 
@@ -765,6 +818,9 @@ State parseCommands(Program *prog, char *cmdStr) {
         {.name="icol", .fn=icol_cmd},
         {.name="acol", .fn=acol_cmd},
         {.name="dcol", .fn=dcol_cmd},
+        // Data commands
+        // Variable commands
+        // Control commands
     };
     const int NUM_KNOWN_CMDS = sizeof(knownCommands) / sizeof(Command);
     // the imaginary reading head of cmdStr
