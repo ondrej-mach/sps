@@ -91,7 +91,7 @@ typedef struct {
 
 // One structure is easier to manage than an array of commands
 typedef struct {
-    size_t len;
+    unsigned len;
     // dynamic array with commands
     Command *cmds;
 } Program;
@@ -535,10 +535,6 @@ unsigned selRightBound(Table *table) {
     return table->sel.endCol;
 }
 
-bool isNAN(double d) {
-    return d != d;
-}
-
 // select one cell
 State selectCell(Table *table, unsigned row, unsigned col) {
     table->sel.startRow = row;
@@ -674,19 +670,11 @@ State moveCol(Table *table, unsigned start, unsigned end) {
 // they all have the same interface (patrameter is Context, return is State)
 // all the functions also have _cmd just to signify this
 
-State test_cmd(Context ctx) {
-    fprintf(stderr, "test executed with arguments '%s'\n", ctx.argStr);
-    return SUCCESS;
-}
-
 State dump_cmd(Context ctx) {
     // if argument is not empty
     if (ctx.argStr[0] != '\0')
         return ERR_BAD_SYNTAX;
 
-    Variables *vars;
-    // be very careful, this influences the flow of the program
-    unsigned *execPtr;
     fprintf(stderr, "Context dump:\nVariables:\n");
 
     for(int i=1; i<=9; i++)
@@ -706,6 +694,7 @@ State dump_cmd(Context ctx) {
         ctx.table->sel.endRow
     );
 
+    fprintf(stderr, "Execution pointer: %d\n", *(ctx.execPtr));
     return SUCCESS;
 }
 
@@ -726,6 +715,7 @@ State selectMax_cmd(Context ctx) {
     return selectMinMax(ctx.table, true);
 }
 
+// Command to select cells from coordinates
 State selectCoords_cmd(Context ctx) {
     if (ctx.argStr[0] != '[')
         return ERR_BAD_SYNTAX;
@@ -769,10 +759,7 @@ State selectCoords_cmd(Context ctx) {
     }
 
     if (numValues == 2) {
-        ctx.table->sel.startRow = values[0];
-        ctx.table->sel.endRow = values[0];
-        ctx.table->sel.startCol = values[1];
-        ctx.table->sel.endCol = values[1];
+        selectCell(ctx.table, values[0], values[1]);
         return SUCCESS;
     }
 
@@ -785,6 +772,33 @@ State selectCoords_cmd(Context ctx) {
     }
 
     return ERR_BAD_SYNTAX;
+}
+
+// applies selection variable to the table
+State selectSet_cmd(Context ctx) {
+    ctx.vars->selVar = ctx.table->sel;
+    return SUCCESS;
+}
+
+// select the first cell, where str argument matches
+State selectFind_cmd(Context ctx) {
+    // copy original string
+    char searchStr[strlen(ctx.argStr) + 1];
+    strcpy(searchStr, ctx.argStr);
+    // remove the ] at the end
+    searchStr[strlen(ctx.argStr)-1] = '\0';
+
+    // go through every selected cell
+    for (unsigned i=selUpperBound(ctx.table); i <= selLowerBound(ctx.table); i++) {
+        for (unsigned j=selLeftBound(ctx.table); j <= selRightBound(ctx.table); j++) {
+            Cell *cellPtr = getCellPtr(ctx.table, i, j);
+            if (strcmp(cellPtr->str, searchStr) == 0) {
+                selectCell(ctx.table, i, j);
+                return SUCCESS;
+            }
+        }
+    }
+    return SUCCESS;
 }
 
 // appends a row after the lower bound of the selection
@@ -980,14 +994,13 @@ State parseCommands(Program *prog, char *cmdStr) {
     // all commands except selection because of their weird syntax
     const Command knownCommands[] = {
         // Custom commands (not in official specification)
-        {.name="test", .fn=test_cmd}, // TODO delete later?
         {.name="print", .fn=print_cmd},
         {.name="dump", .fn=dump_cmd},
         // Selection
         {.name="[min]", .fn=selectMin_cmd},
         {.name="[max]", .fn=selectMax_cmd},
-        {.name="[find ", .fn=selectMin_cmd}, // cannot work with STR, maybe TODO later?
-        {.name="[set]", .fn=selectMin_cmd},
+        {.name="[find ", .fn=selectFind_cmd}, // cannot work with STR, maybe TODO later?
+        {.name="[set]", .fn=selectSet_cmd},
         // Layout commands
         {.name="irow", .fn=irow_cmd},
         {.name="arow", .fn=arow_cmd},
@@ -1060,9 +1073,10 @@ State executeProgram(Program *prog, Table *table) {
     Variables variables;
     variables_ctor(&variables);
     // set context, that doesn't change with each command
-    Context context = {.table=table, .vars=&variables};
+    unsigned i;
+    Context context = {.table=table, .vars=&variables, .execPtr=&i};
 
-    for (size_t i=0; i < prog->len; i++) {
+    for (i=0; i < prog->len; i++) {
         // set the correct function
         function = prog->cmds[i].fn;
         // set up the context before executing
