@@ -772,6 +772,7 @@ State sumCountSelected(Table *table, double *sum, unsigned *count) {
 // they all have the same interface (patrameter is Context, return is State)
 // all the functions also have _cmd just to signify this
 
+// prints context variables into stderr
 State dump_cmd(Context ctx) {
     // if argument is not empty
     if (ctx.argStr[0] != '\0')
@@ -800,6 +801,7 @@ State dump_cmd(Context ctx) {
     return SUCCESS;
 }
 
+// prints the table into stderr
 State print_cmd(Context ctx) {
     // if argument is not empty
     if (ctx.argStr[0] != '\0')
@@ -809,10 +811,12 @@ State print_cmd(Context ctx) {
     return SUCCESS;
 }
 
+// selects the lowest nuber from selected cells
 State selectMin_cmd(Context ctx) {
     return selectMinMax(ctx.table, false);
 }
 
+// selects the highest nuber from selected cells
 State selectMax_cmd(Context ctx) {
     return selectMinMax(ctx.table, true);
 }
@@ -908,6 +912,8 @@ State selectFind_cmd(Context ctx) {
     }
     return SUCCESS;
 }
+
+// Layout commands
 
 // appends a row after the lower bound of the selection
 State arow_cmd(Context ctx) {
