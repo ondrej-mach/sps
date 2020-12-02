@@ -14,6 +14,7 @@
 #define MAX_COMMAND_LENGTH 1001
 #define MAX_FILENAME_LENGTH 1001
 #define MAX_DELIMITERS 1001
+#define INF_CYCLE_LIMIT 1000000
 
 // struct for each cell
 // might not be necessary, but makes the program more extensible
@@ -65,7 +66,8 @@ typedef enum {
     ERR_FILE_ACCESS,
     ERR_BAD_ORDER,
     ERR_BAD_TABLE,
-    ERR_MEMORY
+    ERR_MEMORY,
+    ERR_INF_CYCLE,
 } State;
 
 // Everything, that commands might have access to
@@ -75,7 +77,7 @@ typedef struct {
     // arguments ot the command itself
     char *argStr;
     Variables *vars;
-    // be very careful, this INFINITYluences the flow of the program
+    // be very careful, this influences the flow of the program
     unsigned *execPtr;
 } Context;
 
@@ -633,7 +635,7 @@ State selectMinMax(Table *table, bool max) {
     double extreme = max ? -INFINITY : INFINITY;
     unsigned extremeRow = 0;
     unsigned extremeCol = 0;
-    // go throug every selected cell
+    // go through every selected cell
     for (unsigned i=selUpperBound(table); i <= selLowerBound(table); i++) {
         for (unsigned j=selLeftBound(table); j <= selRightBound(table); j++) {
             Cell *cellPtr = getCellPtr(table, i, j);
@@ -1154,27 +1156,84 @@ State len_cmd(Context ctx) {
 
 State def_cmd(Context ctx) {
     int n = ctx.argStr[0] - '0';
-    if ((ctx.argStr[1] != '\0') || (n < 0) || (n > 9));
+    if ((ctx.argStr[1] != '\0') || (n < 0) || (n > 9))
         return ERR_BAD_SYNTAX;
 
     Cell *src = selectedCell(ctx.table);
-    deepCopyCell(ctx.vars[n], src);
+    if (src == NULL)
+        return ERR_BAD_SELECTION;
+    deepCopyCell(&ctx.vars->cellVars[n], src);
 
-    swapCell(c1, c2);
     return SUCCESS;
 }
 
-State def_cmd(Context ctx) {
+State use_cmd(Context ctx) {
     int n = ctx.argStr[0] - '0';
-    if ((ctx.argStr[1] != '\0') || (n < 0) || (n > 9));
+    if ((ctx.argStr[1] != '\0') || (n < 0) || (n > 9))
         return ERR_BAD_SYNTAX;
 
-    Cell *src = selectedCell(ctx.table);
-    deepCopyCell(ctx.vars[n], src);
+    Cell *dst = selectedCell(ctx.table);
+    if (dst == NULL)
+        return ERR_BAD_SELECTION;
+    deepCopyCell(dst, &ctx.vars->cellVars[n]);
 
     return SUCCESS;
 }
 
+State inc_cmd(Context ctx) {
+    int n = ctx.argStr[0] - '0';
+    if ((ctx.argStr[1] != '\0') || (n < 0) || (n > 9))
+        return ERR_BAD_SYNTAX;
+
+    // variable to increment
+    Cell *cellPtr = &ctx.vars->cellVars[n];
+
+    double value = cellToDouble(cellPtr);
+
+    if (isnan(value)) {
+        writeCell(cellPtr, "1");
+        return SUCCESS;
+    }
+
+    char buffer[MAX_CELL_LENGTH];
+    sprintf(buffer, "%g", value + 1);
+
+    writeCell(cellPtr, buffer);
+    return SUCCESS;
+}
+
+// Control commands
+
+State goto_cmd(Context ctx) {
+    char *endPtr;
+    int steps = strtol(ctx.argStr, &endPtr, 10);
+
+    if (*endPtr != '\0')
+        return ERR_BAD_SYNTAX;
+
+    // goto +1 should have no effect
+    *ctx.execPtr += steps - 1;
+    return SUCCESS;
+}
+
+State iszero_cmd(Context ctx) {
+    int n = ctx.argStr[0] - '0';
+    if ((ctx.argStr[1] != ' ') || (n < 0) || (n > 9))
+        return ERR_BAD_SYNTAX;
+
+    // points at varible that needs to be checked
+    Cell *cellPtr = &ctx.vars->cellVars[n];
+
+    char *endPtr;
+    long steps = strtol(&ctx.argStr[2], &endPtr, 10);
+    if (*endPtr != '\0')
+        return ERR_BAD_SYNTAX;
+
+    if (strcmp(cellPtr->str, "0") == 0)
+        *ctx.execPtr += steps - 1;
+
+    return SUCCESS;
+}
 
 // ---------- MORE COMPLEX FUNCTIONS -----------
 
@@ -1281,7 +1340,9 @@ State parseCommands(Program *prog, char *cmdStr) {
         {.name="inc _", .fn=inc_cmd},
         {.name="[set]", .fn=selectLoad_cmd},
         // Control commands
-
+        {.name="goto ", .fn=goto_cmd},
+        {.name="iszero _", .fn=iszero_cmd},
+        //{.name="sub ", .fn=goto_cmd},
     };
     const int NUM_KNOWN_CMDS = sizeof(knownCommands) / sizeof(Command);
     // the imaginary reading head of cmdStr
@@ -1345,6 +1406,8 @@ State executeProgram(Program *prog, Table *table) {
     unsigned i;
     Context context = {.table=table, .vars=&variables, .execPtr=&i};
 
+    unsigned realCounter = 0;
+
     for (i=0; i < prog->len; i++) {
         // set the correct function
         function = prog->cmds[i].fn;
@@ -1354,6 +1417,11 @@ State executeProgram(Program *prog, Table *table) {
         s = function(context);
         if (s != SUCCESS)
             break;
+
+        if (realCounter++ >= INF_CYCLE_LIMIT) {
+            s = ERR_INF_CYCLE;
+            break;
+        }
     }
     variables_dtor(&variables);
     return s;
