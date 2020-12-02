@@ -540,7 +540,7 @@ State selectCell(Table *table, unsigned row, unsigned col) {
     table->sel.startRow = row;
     table->sel.endRow = row;
     table->sel.startCol = col;
-    table->sel.startCol = col;
+    table->sel.endCol = col;
 
     return SUCCESS;
 }
@@ -576,7 +576,6 @@ State selectMinMax(Table *table, bool max) {
 // ---------- INTERFACE FUNCTIONS -----------
 // these functions are interface between raw data and command functions
 // all addresses use user addressing for cells
-
 
 // make sure, that the coordinates up to these can be accessed
 State assureTableSize(Table *table, unsigned rows, unsigned cols) {
@@ -663,7 +662,6 @@ State moveCol(Table *table, unsigned start, unsigned end) {
     }
     return SUCCESS;
 }
-
 
 // ---------- COMMAND FUNCTIONS -----------
 // the functions, that execute the actual commands
@@ -916,6 +914,8 @@ State dcol_cmd(Context ctx) {
     }
     return s;
 }
+
+
 
 // ---------- MORE COMPLEX FUNCTIONS -----------
 
