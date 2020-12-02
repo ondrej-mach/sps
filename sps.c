@@ -55,10 +55,9 @@ typedef struct {
 // these are returned by most functions that can fail in any way
 typedef enum {
     SUCCESS = 0,
-    NOT_FOUND,
     ERR_GENERIC,
     ERR_TOO_LONG,
-    ERR_OUT_OF_RANGE,
+    ERR_BAD_SELECTION,
     ERR_BAD_SYNTAX,
     ERR_BAD_COMMANDS,
     ERR_BAD_FORMAT,
@@ -110,6 +109,8 @@ unsigned selUpperBound(Table *table);
 unsigned selLowerBound(Table *table);
 unsigned selLeftBound(Table *table);
 unsigned selRightBound(Table *table);
+
+State assureTableSize(Table *table, unsigned rows, unsigned cols);
 
 // ---------- STRING FUNCTIONS ------------
 
@@ -179,16 +180,95 @@ int strbgn(const char *str, const char *substr) {
     return memcmp(str, substr, len);
 }
 
-// removes square brackets "[ab, cd]" -> "ab, cd"
-// error if there are not brackets from both sides
-State remSqBrackets(char *str) {
-    size_t len = strlen(str);
-    if ((str[0] != '[') || (str[len-1] != ']'))
+State parseCoords(char *str, unsigned *a, unsigned *b) {
+    if (str[0] != '[')
         return ERR_BAD_SYNTAX;
 
-    memmove (&str[0], &str[1], len-2);
-    str[len-2] = '\0';
+    // shift for '[' at the beginning
+    unsigned strIndex = 1;
+
+    char *endPtr;
+    int shift;
+
+    *a = (unsigned)strtol(&str[strIndex], &endPtr, 10);
+    shift = endPtr - &str[strIndex];
+    strIndex += shift;
+    if (shift == 0)
+        return ERR_BAD_SYNTAX;
+
+    if (str[strIndex] != ',')
+        return ERR_BAD_SYNTAX;
+    strIndex += 1;
+
+    *b = (unsigned)strtol(&str[strIndex], &endPtr, 10);
+    shift = endPtr - &str[strIndex];
+    strIndex += shift;
+    if (shift == 0)
+        return ERR_BAD_SYNTAX;
+
+    if (strcmp(&str[strIndex], "]") != 0)
+        return ERR_BAD_SYNTAX;
+
+    if (*a == 0 || *b == 0)
+        return ERR_BAD_SYNTAX;
+
     return SUCCESS;
+}
+
+State parseSelection(Selection *sel, char *str) {
+    if (str[0] != '[')
+        return ERR_BAD_SYNTAX;
+
+    const unsigned MAX_NUM = 4;
+    unsigned numValues = 0;
+    unsigned values[MAX_NUM];
+
+    // shift for '[' at the beginning
+    unsigned strIndex = 1;
+    while (numValues < MAX_NUM) {
+        if (str[strIndex] == '_') {
+            values[numValues] = 0;
+            strIndex += 1;
+        } else {
+            char *endPtr;
+            values[numValues] = (unsigned)strtol(&str[strIndex], &endPtr, 10);
+            int shift = endPtr - &str[strIndex];
+
+            if (shift == 0)
+                return ERR_BAD_SYNTAX;
+
+            strIndex += shift;
+        }
+        numValues++;
+
+        if (str[strIndex] == ',') {
+            strIndex++;
+            continue;
+        }
+
+        if (str[strIndex] == ']')
+            break;
+
+        return ERR_BAD_SYNTAX;
+    }
+
+    if (numValues == 2) {
+        sel->startRow = values[0];
+        sel->endRow = values[0];
+        sel->startCol = values[1];
+        sel->endCol = values[1];
+        return SUCCESS;
+    }
+
+    if (numValues == 4) {
+        sel->startRow = values[0];
+        sel->endRow = values[2];
+        sel->startCol = values[1];
+        sel->endCol = values[3];
+        return SUCCESS;
+    }
+
+    return ERR_BAD_SYNTAX;
 }
 
 // ---------- OTHER FUNCTIONS ------------
@@ -274,6 +354,10 @@ double cellToDouble(Cell *cell) {
 
 // gets cell pointer from its coordinates
 Cell *getCellPtr(Table *table, unsigned row, unsigned col) {
+    if ((row == 0) || (col == 0))
+        return NULL;
+
+    assureTableSize(table, row, col);
     return &table->cells[row-1][col-1];
 }
 
@@ -540,7 +624,7 @@ State selectCell(Table *table, unsigned row, unsigned col) {
     table->sel.startRow = row;
     table->sel.endRow = row;
     table->sel.startCol = col;
-    table->sel.startCol = col;
+    table->sel.endCol = col;
 
     return SUCCESS;
 }
@@ -577,18 +661,17 @@ State selectMinMax(Table *table, bool max) {
 // these functions are interface between raw data and command functions
 // all addresses use user addressing for cells
 
-
 // make sure, that the coordinates up to these can be accessed
 State assureTableSize(Table *table, unsigned rows, unsigned cols) {
     State s = SUCCESS;
     // Add columns to table, until they at least match
-    while (cols >= table->cols) {
+    while (cols > table->cols) {
         s = addCol(table);
         if (s != SUCCESS)
             return s;
     }
     // Do the same for rows
-    while (rows >= table->rows) {
+    while (rows > table->rows) {
         s = addRow(table);
         if (s != SUCCESS)
             return s;
@@ -664,6 +747,23 @@ State moveCol(Table *table, unsigned start, unsigned end) {
     return SUCCESS;
 }
 
+State sumCountSelected(Table *table, double *sum, unsigned *count) {
+    *sum = 0;
+    *count = 0;
+    // go through every selected cell
+    for (unsigned i=selUpperBound(table); i <= selLowerBound(table); i++) {
+        for (unsigned j=selLeftBound(table); j <= selRightBound(table); j++) {
+            Cell *cellPtr = getCellPtr(table, i, j);
+            double value = cellToDouble(cellPtr);
+            if (isnan(value))
+                continue;
+
+            *sum += value;
+            (*count)++;
+        }
+    }
+    return SUCCESS;
+}
 
 // ---------- COMMAND FUNCTIONS -----------
 // the functions, that execute the actual commands
@@ -775,8 +875,14 @@ State selectCoords_cmd(Context ctx) {
 }
 
 // applies selection variable to the table
-State selectSet_cmd(Context ctx) {
+State selectStore_cmd(Context ctx) {
     ctx.vars->selVar = ctx.table->sel;
+    return SUCCESS;
+}
+
+// applies selection variable to the table
+State selectLoad_cmd(Context ctx) {
+    ctx.table->sel = ctx.vars->selVar;
     return SUCCESS;
 }
 
@@ -917,6 +1023,159 @@ State dcol_cmd(Context ctx) {
     return s;
 }
 
+State set_cmd(Context ctx) {
+    // go through every selected cell
+    for (unsigned i=selUpperBound(ctx.table); i <= selLowerBound(ctx.table); i++) {
+        for (unsigned j=selLeftBound(ctx.table); j <= selRightBound(ctx.table); j++) {
+            Cell *cellPtr = getCellPtr(ctx.table, i, j);
+            State s = writeCell(cellPtr, ctx.argStr);
+            if (s != SUCCESS)
+                return s;
+        }
+    }
+    return SUCCESS;
+}
+
+State clear_cmd(Context ctx) {
+    if (ctx.argStr[0] != '\0')
+        return ERR_BAD_SYNTAX;
+    // go through every selected cell
+    for (unsigned i=selUpperBound(ctx.table); i <= selLowerBound(ctx.table); i++) {
+        for (unsigned j=selLeftBound(ctx.table); j <= selRightBound(ctx.table); j++) {
+            Cell *cellPtr = getCellPtr(ctx.table, i, j);
+            State s = writeCell(cellPtr, "");
+            if (s != SUCCESS)
+                return s;
+        }
+    }
+    return SUCCESS;
+}
+
+// Data commands
+
+// swaps selected cell with the cell specified by argument
+State swap_cmd(Context ctx) {
+    unsigned row, col;
+    State s = parseCoords(ctx.argStr, &row, &col);
+    if (s != SUCCESS)
+        return s;
+
+    Cell *c1 = getCellPtr(ctx.table, row, col);
+    Cell *c2 = selectedCell(ctx.table);
+
+    if (c1 == NULL)
+        return ERR_BAD_SYNTAX;
+
+    if (c2 == NULL)
+        return ERR_BAD_SELECTION;
+
+    swapCell(c1, c2);
+    return SUCCESS;
+}
+
+State sum_cmd(Context ctx) {
+    unsigned row, col;
+    State s = parseCoords(ctx.argStr, &row, &col);
+    if (s != SUCCESS)
+        return s;
+
+    double sum;
+    unsigned count;
+    sumCountSelected(ctx.table, &sum, &count);
+
+    char buffer[MAX_CELL_LENGTH];
+    sprintf(buffer, "%g", sum);
+
+    Cell *resultCell = getCellPtr(ctx.table, row, col);
+    writeCell(resultCell, buffer);
+
+    return SUCCESS;
+}
+
+State avg_cmd(Context ctx) {
+    unsigned row, col;
+    State s = parseCoords(ctx.argStr, &row, &col);
+    if (s != SUCCESS)
+        return s;
+
+    double sum;
+    unsigned count;
+    sumCountSelected(ctx.table, &sum, &count);
+    char buffer[MAX_CELL_LENGTH];
+
+    sprintf(buffer, "%g", sum / count);
+    Cell *resultCell = getCellPtr(ctx.table, row, col);
+    writeCell(resultCell, buffer);
+    return SUCCESS;
+}
+
+State count_cmd(Context ctx) {
+    unsigned row, col;
+    State s = parseCoords(ctx.argStr, &row, &col);
+    if (s != SUCCESS)
+        return s;
+
+    unsigned count=0;
+
+    // go through every selected cell
+    for (unsigned i=selUpperBound(ctx.table); i <= selLowerBound(ctx.table); i++) {
+        for (unsigned j=selLeftBound(ctx.table); j <= selRightBound(ctx.table); j++) {
+            Cell *cellPtr = getCellPtr(ctx.table, i, j);
+
+            if (strcmp(cellPtr->str, ""))
+                count++;
+        }
+    }
+    char buffer[MAX_CELL_LENGTH];
+    sprintf(buffer, "%d", count);
+    Cell *resultCell = getCellPtr(ctx.table, row, col);
+    writeCell(resultCell, buffer);
+    return SUCCESS;
+}
+
+State len_cmd(Context ctx) {
+    unsigned row, col;
+    State s = parseCoords(ctx.argStr, &row, &col);
+    if (s != SUCCESS)
+        return s;
+
+    Cell *measuredCell = selectedCell(ctx.table);
+    size_t len = strlen(measuredCell->str);
+
+    char buffer[MAX_CELL_LENGTH];
+    sprintf(buffer, "%lu", len);
+
+    Cell *resultCell = getCellPtr(ctx.table, row, col);
+    writeCell(resultCell, buffer);
+    return SUCCESS;
+}
+
+// Variable commands
+
+State def_cmd(Context ctx) {
+    int n = ctx.argStr[0] - '0';
+    if ((ctx.argStr[1] != '\0') || (n < 0) || (n > 9));
+        return ERR_BAD_SYNTAX;
+
+    Cell *src = selectedCell(ctx.table);
+    deepCopyCell(ctx.vars[n], src);
+
+    swapCell(c1, c2);
+    return SUCCESS;
+}
+
+State def_cmd(Context ctx) {
+    int n = ctx.argStr[0] - '0';
+    if ((ctx.argStr[1] != '\0') || (n < 0) || (n > 9));
+        return ERR_BAD_SYNTAX;
+
+    Cell *src = selectedCell(ctx.table);
+    deepCopyCell(ctx.vars[n], src);
+
+    return SUCCESS;
+}
+
+
 // ---------- MORE COMPLEX FUNCTIONS -----------
 
 // Reads table from stdin and saves it into the table structure
@@ -947,7 +1206,7 @@ State readTable(Table *table, FILE *f, char *delimiters) {
             break;
 
         // write to table
-        s = assureTableSize(table, row, col);
+        s = assureTableSize(table, row+1, col+1);
         if (s != SUCCESS)
             return s;
 
@@ -1000,7 +1259,7 @@ State parseCommands(Program *prog, char *cmdStr) {
         {.name="[min]", .fn=selectMin_cmd},
         {.name="[max]", .fn=selectMax_cmd},
         {.name="[find ", .fn=selectFind_cmd}, // cannot work with STR, maybe TODO later?
-        {.name="[set]", .fn=selectSet_cmd},
+        {.name="[_]", .fn=selectStore_cmd},
         // Layout commands
         {.name="irow", .fn=irow_cmd},
         {.name="arow", .fn=arow_cmd},
@@ -1009,8 +1268,20 @@ State parseCommands(Program *prog, char *cmdStr) {
         {.name="acol", .fn=acol_cmd},
         {.name="dcol", .fn=dcol_cmd},
         // Data commands
+        {.name="set ", .fn=set_cmd},
+        {.name="clear", .fn=clear_cmd},
+        {.name="swap ", .fn=swap_cmd},
+        {.name="sum ", .fn=sum_cmd},
+        {.name="avg ", .fn=avg_cmd},
+        {.name="count ", .fn=count_cmd},
+        {.name="len ", .fn=len_cmd},
         // Variable commands
+        {.name="def _", .fn=def_cmd},
+        {.name="use _", .fn=use_cmd},
+        {.name="inc _", .fn=inc_cmd},
+        {.name="[set]", .fn=selectLoad_cmd},
         // Control commands
+
     };
     const int NUM_KNOWN_CMDS = sizeof(knownCommands) / sizeof(Command);
     // the imaginary reading head of cmdStr
@@ -1019,19 +1290,17 @@ State parseCommands(Program *prog, char *cmdStr) {
     while (true) {
         bool found = false;
         // check for command
-        if (!found) {
-            for (int j=0; j < NUM_KNOWN_CMDS; j++) {
-                // if the command is found at the beginning of current index
-                if (strbgn(&cmdStr[strIndex], knownCommands[j].name) == 0) {
-                    strIndex += strlen(knownCommands[j].name);
-                    addCommand(prog, &knownCommands[j]);
-                    found = true;
-                    break;
-                }
+        for (int j=0; j < NUM_KNOWN_CMDS; j++) {
+            // if the command is found at the beginning of current index
+            if (strbgn(&cmdStr[strIndex], knownCommands[j].name) == 0) {
+                strIndex += strlen(knownCommands[j].name);
+                addCommand(prog, &knownCommands[j]);
+                found = true;
+                break;
             }
         }
         // check for the weird coordinate selection command
-        if (cmdStr[strIndex] == '[') {
+        if (!found && (cmdStr[strIndex] == '[')) {
             const Command select = {.fn=selectCoords_cmd};
             addCommand(prog, &select);
             found = true;
@@ -1093,9 +1362,7 @@ State executeProgram(Program *prog, Table *table) {
 // prints basic help on how to use the program
 void printUsage() {
     const char *usageString = "\nUsage:\n"
-        "./sheet [-d DELIM] [Commands for editing the table]\n"
-        "or\n"
-        "./sheet [-d DELIM] [Row selection] [Command for processing the data]\n";
+        "./sps [-d DELIM] [Commands for editing the table]\n";
 
     fprintf(stderr, "%s", usageString);
 }
@@ -1106,21 +1373,12 @@ void printErrorMessage(State err_state) {
         case SUCCESS:
             break;
 
-        case NOT_FOUND:
-            fputs("No commands found\n", stderr);
-            printUsage();
-            break;
-
         case ERR_GENERIC:
             fputs("Generic error\n", stderr);
             break;
 
         case ERR_TOO_LONG:
             fputs("Maximum file size is 10kiB\n", stderr);
-            break;
-
-        case ERR_OUT_OF_RANGE:
-            fputs("Given cell coordinates are out of range\n", stderr);
             break;
 
         case ERR_BAD_SYNTAX:
