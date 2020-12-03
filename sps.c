@@ -1451,13 +1451,13 @@ void printErrorMessage(State err_state) {
         [ERR_BAD_SELECTION] = "A command can't be executed for this selection",
         [ERR_BAD_SYNTAX] = "Bad syntax",
         [ERR_COMMAND_NOT_FOUND] = "Command not found",
-        [ERR_BAD_INPUT] = "Input table's format is incompatible"
-        [ERR_FILE_ACCESS] = "Could not access the file"
-        [ERR_MEMORY] = "Memory allocation failed"
-        [ERR_INF_CYCLE] = "The program has run into an infinite loop"
+        [ERR_BAD_INPUT] = "Input table's format is incompatible",
+        [ERR_FILE_ACCESS] = "Could not access the file",
+        [ERR_MEMORY] = "Memory allocation failed",
+        [ERR_INF_CYCLE] = "The program has run into an infinite loop",
     };
 
-    const int NUM_KNOWN_ERRORS = sizeof(errMsgs) / sizeof(char *);
+    const unsigned NUM_KNOWN_ERRORS = sizeof(errMsgs) / sizeof(char *);
 
     if (err_state < NUM_KNOWN_ERRORS) {
         fputs(errMsgs[err_state], stderr);
