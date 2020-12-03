@@ -12,9 +12,7 @@
 
 #define MAX_CELL_LENGTH 1001
 #define MAX_COMMAND_LENGTH 1001
-#define MAX_FILENAME_LENGTH 1001
-#define MAX_DELIMITERS 1001
-#define INF_CYCLE_LIMIT 1000000
+#define INF_CYCLE_LIMIT 10000
 
 // struct for each cell
 // might not be necessary, but makes the program more extensible
@@ -33,18 +31,18 @@ typedef struct {
 } Selection;
 
 // struct for table
-// stores only one main delimiter
-// others get replaced while reading the table
 typedef struct {
+    // number of rows and columns
     unsigned rows, cols;
+    // the actual data, dynamically allocated
     Cell **cells;
+    // selection is an attribute of the table
     Selection sel;
+    // the main delimiter
     char delim;
 } Table;
 
 // struct for table
-// stores only one main delimiter
-// others get replaced while reading the table
 typedef struct {
     // variables _0 to _9
     Cell cellVars[10];
@@ -57,15 +55,11 @@ typedef struct {
 typedef enum {
     SUCCESS = 0,
     ERR_GENERIC,
-    ERR_TOO_LONG,
     ERR_BAD_SELECTION,
     ERR_BAD_SYNTAX,
-    ERR_BAD_COMMANDS,
-    ERR_BAD_FORMAT,
-    ERR_TABLE_EMPTY,
+    ERR_COMMAND_NOT_FOUND,
+    ERR_BAD_INPUT,
     ERR_FILE_ACCESS,
-    ERR_BAD_ORDER,
-    ERR_BAD_TABLE,
     ERR_MEMORY,
     ERR_INF_CYCLE,
 } State;
@@ -182,41 +176,7 @@ int strbgn(const char *str, const char *substr) {
     return memcmp(str, substr, len);
 }
 
-State parseCoords(char *str, unsigned *a, unsigned *b) {
-    if (str[0] != '[')
-        return ERR_BAD_SYNTAX;
-
-    // shift for '[' at the beginning
-    unsigned strIndex = 1;
-
-    char *endPtr;
-    int shift;
-
-    *a = (unsigned)strtol(&str[strIndex], &endPtr, 10);
-    shift = endPtr - &str[strIndex];
-    strIndex += shift;
-    if (shift == 0)
-        return ERR_BAD_SYNTAX;
-
-    if (str[strIndex] != ',')
-        return ERR_BAD_SYNTAX;
-    strIndex += 1;
-
-    *b = (unsigned)strtol(&str[strIndex], &endPtr, 10);
-    shift = endPtr - &str[strIndex];
-    strIndex += shift;
-    if (shift == 0)
-        return ERR_BAD_SYNTAX;
-
-    if (strcmp(&str[strIndex], "]") != 0)
-        return ERR_BAD_SYNTAX;
-
-    if (*a == 0 || *b == 0)
-        return ERR_BAD_SYNTAX;
-
-    return SUCCESS;
-}
-
+// parse any selection with coordinates
 State parseSelection(Selection *sel, char *str) {
     if (str[0] != '[')
         return ERR_BAD_SYNTAX;
@@ -228,7 +188,7 @@ State parseSelection(Selection *sel, char *str) {
     // shift for '[' at the beginning
     unsigned strIndex = 1;
     while (numValues < MAX_NUM) {
-        if (str[strIndex] == '_') {
+        if (str[strIndex] == '_' || str[strIndex] == '-') {
             values[numValues] = 0;
             strIndex += 1;
         } else {
@@ -271,6 +231,28 @@ State parseSelection(Selection *sel, char *str) {
     }
 
     return ERR_BAD_SYNTAX;
+}
+
+State parseCoords(char *str, unsigned *a, unsigned *b) {
+    Selection sel;
+
+    State s = parseSelection(&sel, str);
+    if (s != SUCCESS)
+        return s;
+
+    if (sel.startRow != sel.endRow)
+        return ERR_BAD_SYNTAX;
+
+    if (sel.startCol != sel.endCol)
+        return ERR_BAD_SYNTAX;
+
+    if (sel.startCol == 0 || sel.endCol == 0)
+        return ERR_BAD_SYNTAX;
+
+    *a = sel.startRow;
+    *b = sel.startCol;
+
+    return SUCCESS;
 }
 
 // ---------- OTHER FUNCTIONS ------------
@@ -331,7 +313,7 @@ State swapCell(Cell *c1, Cell *c2) {
 void printCell(Table *table, Cell *cell, FILE *f) {
     char buffer[2*strlen(cell->str) + 1];
     strcpy(buffer, "");
-    // TODO
+
     if (strchr(cell->str, table->delim)) {
         // if there is delimiter in the cell
         strcat(buffer, "\"");
@@ -410,84 +392,6 @@ State addCommand(Program *prog, const Command *cmd) {
     prog->cmds[last].fn = cmd->fn;
     // not set yet
     prog->cmds[last].argStr = NULL;
-    return SUCCESS;
-}
-
-// ---------- ARGUMENTS FUNCTIONS ------------
-
-// TODO might not be needed
-State arguments_ctor(Arguments *args) {
-    args->delimiters = NULL;
-    args->filename = NULL;
-    args->commandString = NULL;
-    return SUCCESS;
-}
-
-// reads delimiters from arguments
-State parseArguments(int argc, char **argv, Arguments *args) {
-    if (argc < 2)
-        return ERR_BAD_SYNTAX;
-
-    int i = 1;
-    // reading delimiters
-    if (strcmp("-d", argv[i]) == 0) {
-        if (++i >= argc)
-            return ERR_BAD_SYNTAX;
-
-        args->delimiters = malloc(strlen(argv[i]) + 1);
-        if (args->delimiters == NULL)
-            return ERR_MEMORY;
-
-        strcpy(args->delimiters, argv[i]);
-        if (++i >= argc)
-            return ERR_BAD_SYNTAX;
-    } else {
-        args->delimiters = malloc(2 * sizeof(char));
-        if (args->delimiters == NULL)
-            return ERR_MEMORY;
-
-        strcpy(args->delimiters, " ");
-    }
-
-    // reading commands from file
-    if (strcmp("-c", argv[i]) == 0) {
-        if (++i >= argc)
-            return ERR_BAD_SYNTAX;
-
-        // file with commands
-        FILE *fp = fopen(argv[i], "r");
-        if (!fp)
-            return ERR_FILE_ACCESS;
-
-        args->commandString = fileToBuffer(fp);
-        if (args->commandString == NULL)
-            return ERR_MEMORY;
-
-        if (++i >= argc)
-            return ERR_BAD_SYNTAX;
-    } else {
-        // reading commands from the argument
-        args->commandString = malloc(strlen(argv[i]) + 1);
-        if (args->commandString == NULL)
-            return ERR_MEMORY;
-
-        strcpy(args->commandString, argv[i]);
-
-        if (++i >= argc)
-            return ERR_BAD_SYNTAX;
-    }
-
-    args->filename = malloc(strlen(argv[i]) + 1);
-    if (args->filename == NULL)
-        return ERR_MEMORY;
-
-    strcpy(args->filename, argv[i]);
-
-    // if there are any arguments left at this point,
-    // the syntax must be wrong
-    if (i < argc-1)
-        return ERR_BAD_SYNTAX;
-
     return SUCCESS;
 }
 
@@ -767,6 +671,19 @@ State sumCountSelected(Table *table, double *sum, unsigned *count) {
     return SUCCESS;
 }
 
+State setSelectedCells(Table *table, char *str) {
+    // go through every selected cell
+    for (unsigned i=selUpperBound(table); i <= selLowerBound(table); i++) {
+        for (unsigned j=selLeftBound(table); j <= selRightBound(table); j++) {
+            Cell *cellPtr = getCellPtr(table, i, j);
+            State s = writeCell(cellPtr, str);
+            if (s != SUCCESS)
+                return s;
+        }
+    }
+    return SUCCESS;
+}
+
 // ---------- COMMAND FUNCTIONS -----------
 // the functions, that execute the actual commands
 // they all have the same interface (patrameter is Context, return is State)
@@ -780,7 +697,7 @@ State dump_cmd(Context ctx) {
 
     fprintf(stderr, "Context dump:\nVariables:\n");
 
-    for(int i=1; i<=9; i++)
+    for(int i=0; i<=9; i++)
         fprintf(stderr, "\t_%d = '%s'\n", i, ctx.vars->cellVars[i].str);
 
     fprintf(stderr, "\t_ = rows %d to %d, cols %d to %d\n",
@@ -935,7 +852,6 @@ State arow_cmd(Context ctx) {
     return s;
 }
 
-// TODO could be one function with arow
 // inserts a row right above the selected region
 State irow_cmd(Context ctx) {
     if (ctx.argStr[0] != '\0')
@@ -1032,16 +948,7 @@ State dcol_cmd(Context ctx) {
 }
 
 State set_cmd(Context ctx) {
-    // go through every selected cell
-    for (unsigned i=selUpperBound(ctx.table); i <= selLowerBound(ctx.table); i++) {
-        for (unsigned j=selLeftBound(ctx.table); j <= selRightBound(ctx.table); j++) {
-            Cell *cellPtr = getCellPtr(ctx.table, i, j);
-            State s = writeCell(cellPtr, ctx.argStr);
-            if (s != SUCCESS)
-                return s;
-        }
-    }
-    return SUCCESS;
+    return setSelectedCells(ctx.table, ctx.argStr);
 }
 
 State clear_cmd(Context ctx) {
@@ -1178,12 +1085,7 @@ State use_cmd(Context ctx) {
     if ((ctx.argStr[1] != '\0') || (n < 0) || (n > 9))
         return ERR_BAD_SYNTAX;
 
-    Cell *dst = selectedCell(ctx.table);
-    if (dst == NULL)
-        return ERR_BAD_SELECTION;
-    deepCopyCell(dst, &ctx.vars->cellVars[n]);
-
-    return SUCCESS;
+    return setSelectedCells(ctx.table, ctx.vars->cellVars[n].str);
 }
 
 State inc_cmd(Context ctx) {
@@ -1241,6 +1143,33 @@ State iszero_cmd(Context ctx) {
     return SUCCESS;
 }
 
+State sub_cmd(Context ctx) {
+    int m = ctx.argStr[0] - '0';
+    int n = ctx.argStr[3] - '0';
+    // not robust at all but whatever
+    if ((m < 0) || (m > 9) || (n < 0) || (n > 9))
+        return ERR_BAD_SYNTAX;
+
+    Cell *cellPtr = &ctx.vars->cellVars[n];
+    char *endPtr;
+    double toSubtract = strtod(cellPtr->str, &endPtr);
+    if ((*endPtr != '\0') && (endPtr != cellPtr->str))
+        return ERR_GENERIC;
+
+    cellPtr = &ctx.vars->cellVars[m];
+    double value = strtod(cellPtr->str, &endPtr);
+    if ((*endPtr != '\0') && (endPtr != cellPtr->str))
+        return ERR_GENERIC;
+
+    value -= toSubtract;
+
+    char buffer[MAX_CELL_LENGTH];
+    sprintf(buffer, "%g", value);
+    writeCell(cellPtr, buffer);
+
+    return SUCCESS;
+}
+
 // ---------- MORE COMPLEX FUNCTIONS -----------
 
 // Reads table from stdin and saves it into the table structure
@@ -1290,7 +1219,7 @@ State readTable(Table *table, FILE *f, char *delimiters) {
             continue;
         }
         // if nothing matches, the scanned STR was bad
-        return ERR_BAD_FORMAT;
+        return ERR_BAD_INPUT;
     }
     free(fileBuffer);
     return SUCCESS;
@@ -1323,7 +1252,7 @@ State parseCommands(Program *prog, char *cmdStr) {
         // Selection
         {.name="[min]", .fn=selectMin_cmd},
         {.name="[max]", .fn=selectMax_cmd},
-        {.name="[find ", .fn=selectFind_cmd}, // cannot work with STR, maybe TODO later?
+        {.name="[find ", .fn=selectFind_cmd},
         {.name="[_]", .fn=selectStore_cmd},
         // Layout commands
         {.name="irow", .fn=irow_cmd},
@@ -1348,7 +1277,7 @@ State parseCommands(Program *prog, char *cmdStr) {
         // Control commands
         {.name="goto ", .fn=goto_cmd},
         {.name="iszero _", .fn=iszero_cmd},
-        //{.name="sub ", .fn=goto_cmd},
+        {.name="sub _", .fn=sub_cmd},
     };
     const int NUM_KNOWN_CMDS = sizeof(knownCommands) / sizeof(Command);
     // the imaginary reading head of cmdStr
@@ -1376,7 +1305,7 @@ State parseCommands(Program *prog, char *cmdStr) {
         }
 
         if (!found)
-            return ERR_BAD_COMMANDS;
+            return ERR_COMMAND_NOT_FOUND;
         // buffer for command's arguments
         char argBuf[MAX_COMMAND_LENGTH];
         // this might cause some issues later, now commands can be in
@@ -1433,6 +1362,79 @@ State executeProgram(Program *prog, Table *table) {
     return s;
 }
 
+// reads delimiters from arguments
+State parseArguments(int argc, char **argv, Arguments *args) {
+    // initialize in case anything fails
+    args->delimiters = NULL;
+    args->filename = NULL;
+    args->commandString = NULL;
+
+    if (argc < 2)
+        return ERR_BAD_SYNTAX;
+
+    int i = 1;
+    // reading delimiters
+    if (strcmp("-d", argv[i]) == 0) {
+        if (++i >= argc)
+            return ERR_BAD_SYNTAX;
+
+        args->delimiters = malloc(strlen(argv[i]) + 1);
+        if (args->delimiters == NULL)
+            return ERR_MEMORY;
+
+        strcpy(args->delimiters, argv[i]);
+        if (++i >= argc)
+            return ERR_BAD_SYNTAX;
+    } else {
+        args->delimiters = malloc(2 * sizeof(char));
+        if (args->delimiters == NULL)
+            return ERR_MEMORY;
+
+        strcpy(args->delimiters, " ");
+    }
+
+    // reading commands from file
+    if (strcmp("-c", argv[i]) == 0) {
+        if (++i >= argc)
+            return ERR_BAD_SYNTAX;
+
+        // file with commands
+        FILE *fp = fopen(argv[i], "r");
+        if (!fp)
+            return ERR_FILE_ACCESS;
+
+        args->commandString = fileToBuffer(fp);
+        if (args->commandString == NULL)
+            return ERR_MEMORY;
+
+        if (++i >= argc)
+            return ERR_BAD_SYNTAX;
+    } else {
+        // reading commands from the argument
+        args->commandString = malloc(strlen(argv[i]) + 1);
+        if (args->commandString == NULL)
+            return ERR_MEMORY;
+
+        strcpy(args->commandString, argv[i]);
+
+        if (++i >= argc)
+            return ERR_BAD_SYNTAX;
+    }
+
+    args->filename = malloc(strlen(argv[i]) + 1);
+    if (args->filename == NULL)
+        return ERR_MEMORY;
+
+    strcpy(args->filename, argv[i]);
+
+    // if there are any arguments left at this point,
+    // the syntax must be wrong
+    if (i < argc-1)
+        return ERR_BAD_SYNTAX;
+
+    return SUCCESS;
+}
+
 // prints basic help on how to use the program
 void printUsage() {
     const char *usageString = "\nUsage:\n"
@@ -1443,90 +1445,82 @@ void printUsage() {
 
 // prints error message according to the error state
 void printErrorMessage(State err_state) {
-    switch(err_state) {
-        case SUCCESS:
-            break;
+    char *errMsgs[] = {
+        [SUCCESS] = "",
+        [ERR_GENERIC] = "Generic error",
+        [ERR_BAD_SELECTION] = "A command can't be executed for this selection",
+        [ERR_BAD_SYNTAX] = "Bad syntax",
+        [ERR_COMMAND_NOT_FOUND] = "Command not found",
+        [ERR_BAD_INPUT] = "Input table's format is incompatible"
+        [ERR_FILE_ACCESS] = "Could not access the file"
+        [ERR_MEMORY] = "Memory allocation failed"
+        [ERR_INF_CYCLE] = "The program has run into an infinite loop"
+    };
 
-        case ERR_GENERIC:
-            fputs("Generic error\n", stderr);
-            break;
+    const int NUM_KNOWN_ERRORS = sizeof(errMsgs) / sizeof(char *);
 
-        case ERR_TOO_LONG:
-            fputs("Maximum file size is 10kiB\n", stderr);
-            break;
-
-        case ERR_BAD_SYNTAX:
-            fputs("Bad syntax\n", stderr);
-            break;
-
-        case ERR_TABLE_EMPTY:
-            fputs("Table cannot be empty\n", stderr);
-            break;
-
-        case ERR_BAD_ORDER:
-            fputs("Commands are used in wrong order\n", stderr);
-            printUsage();
-            break;
-
-        case ERR_BAD_TABLE:
-            fputs("Table has different numbers of columns in each row\n", stderr);
-            break;
-
-        default:
-            fputs("Unknown error\n", stderr);
-            break;
+    if (err_state < NUM_KNOWN_ERRORS) {
+        fputs(errMsgs[err_state], stderr);
+        fputs("\n", stderr);
+        return;
     }
+    fputs("Unknown error\n", stderr);
 }
 
 int main(int argc, char **argv) {
     // the only instance of the table
     Table table;
     table_ctor(&table);
-
+    // error codes are stored in this variable
     State s = SUCCESS;
-    // file with table data
     FILE *fp = NULL;
-
     // all arguments are parsed into this structure
     Arguments arguments;
-
     // all the commands in dynamic array of Command objects
     // this can be directly executed
     Program program;
     program_ctor(&program);
-
-    if (s == SUCCESS)
-        s = parseArguments(argc, argv, &arguments);
-
+    // firstly load all the arguments from argv
+    s = parseArguments(argc, argv, &arguments);
     // parse the commands, so the memory can be freed
     if (s == SUCCESS)
         s = parseCommands(&program, arguments.commandString);
     free(arguments.commandString);
-
-    // open the file where the table is stored
+    // open file for reading
     if (s == SUCCESS) {
-        fp = fopen(arguments.filename, "r+");
+        fp = fopen(arguments.filename, "r");
+        if (!fp)
+            s = ERR_FILE_ACCESS;
+    }
+    // reading the table
+    if (s == SUCCESS)
+        s = readTable(&table, fp, arguments.delimiters);
+    // free the memory as soon as we don't need it
+    free(arguments.delimiters);
+    // close the file for reading
+    if (fp) {
+        fclose(fp);
+        fp = NULL;
+    }
+    // execute commands on the table
+    if (s == SUCCESS)
+        s = executeProgram(&program, &table);
+    // open the same file for writing
+    if (s == SUCCESS) {
+        //fp = fopen(arguments.filename, "w");
         if (!fp)
             s = ERR_FILE_ACCESS;
     }
     free(arguments.filename);
-
-    // reading the table
+    // print the table into the file
     if (s == SUCCESS)
-        s = readTable(&table, fp, arguments.delimiters);
-    free(arguments.delimiters);
-
-    // executing commands
-    if (s == SUCCESS)
-        s = executeProgram(&program, &table);
-
-    // TODO uncomment to change the actual table
-    // if (s == SUCCESS)
-    //     printTable(&table, fp);
-
-    // if file is opened, close it
-    if (fp)
+        printTable(&table, fp);
+    // close the file
+    if (fp) {
         fclose(fp);
+        fp = NULL;
+    }
+    // deallocate all the variables
     program_dtor(&program);
     table_dtor(&table);
     printErrorMessage(s);
