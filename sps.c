@@ -115,7 +115,9 @@ State assureTableSize(Table *table, unsigned rows, unsigned cols);
 // returns how many characters in original string were parsed
 size_t parseString(char *dst, char *src, char *delims) {
     int srcIndex = 0, dstIndex = 0;
-    bool isQuoted = false, isEscaped = false;
+    bool isQuoted = false;
+    bool isEscaped = false;
+    bool expectingEnd = false;
 
     for (; src[srcIndex] != '\0'; srcIndex++) {
         // if escape character
@@ -131,6 +133,7 @@ size_t parseString(char *dst, char *src, char *delims) {
         // ending quotation
         if ((src[srcIndex] == '\"') && !isEscaped && isQuoted) {
             isQuoted = false;
+            expectingEnd = true;
             continue;
         }
         // if scanned character is delimiter
@@ -144,6 +147,9 @@ size_t parseString(char *dst, char *src, char *delims) {
                 return 0;
             break;
         }
+        // if the string should have ended, there is something wrong
+        if (expectingEnd && src[srcIndex] != ']')
+            return 0;
         // if there is nothing special about the characters
         // write it into the buffer
         dst[dstIndex] = src[srcIndex];
@@ -174,6 +180,12 @@ char *fileToBuffer(FILE *f) {
 int strbgn(const char *str, const char *substr) {
     size_t len = strlen(substr);
     return memcmp(str, substr, len);
+}
+
+// inserts a character into a string
+void strins(char *dst, char *src) {
+    memmove(&dst[strlen(src)], dst, strlen(dst) + 1);
+    memcpy(dst, src, strlen(src));
 }
 
 // parse any selection with coordinates
@@ -311,16 +323,27 @@ State swapCell(Cell *c1, Cell *c2) {
 
 // prints contents of one cell into a file
 void printCell(Table *table, Cell *cell, FILE *f) {
-    char buffer[2*strlen(cell->str) + 1];
-    strcpy(buffer, "");
+    // just to be safe for cases, where there are tons of backslashes
+    char buffer[2*strlen(cell->str) + 5];
+    strcpy(buffer, cell->str);
 
-    if (strchr(cell->str, table->delim)) {
+    bool needsQuotes = false;
+    needsQuotes = needsQuotes || strchr(cell->str, table->delim);
+    needsQuotes = needsQuotes || strchr(cell->str, '\"');
+
+    size_t i = 0;
+    while (buffer[i] != '\0') {
+        if (buffer[i] == '\"') {
+            strins(&buffer[i], "\\");
+            i++;
+        }
+        i++;
+    }
+
+    if (needsQuotes) {
         // if there is delimiter in the cell
-        strcat(buffer, "\"");
-        strcat(buffer, cell->str);
-        strcat(buffer, "\"");
-    } else {
-        strcat(buffer, cell->str);
+        strins(buffer, "\"");
+        strins(&buffer[strlen(buffer)], "\"");
     }
     fprintf(f, "%s", buffer);
 }
@@ -493,6 +516,23 @@ void deleteCol(Table *table) {
     table->cols--;
 }
 
+// deletes columns of the table from the right, that are empty
+State deleteExcessCols(Table *table) {
+    for (unsigned i=table->cols; i >= 1; i--) {
+        bool empty = true;
+        for (unsigned j=1; j <= table->rows; j++) {
+            if (strcmp(getCellPtr(table, j, i)->str, "") != 0) {
+                empty = false;
+                break;
+            }
+        }
+        if (empty)
+            deleteCol(table);
+    }
+    return SUCCESS;
+}
+
+
 // ---------- SELECTION FUNCTIONS -----------
 // functions don't have to access the data directly
 // program is more extensible this way
@@ -506,6 +546,8 @@ unsigned selUpperBound(Table *table) {
 
 unsigned selLowerBound(Table *table) {
     if (table->sel.endRow == 0) {
+        if (table->rows == 0)
+            return 1;
         return table->rows;
     }
     return table->sel.endRow;
@@ -520,6 +562,8 @@ unsigned selLeftBound(Table *table) {
 
 unsigned selRightBound(Table *table) {
     if (table->sel.endCol == 0) {
+        if (table->cols == 0)
+            return 1;
         return table->cols;
     }
     return table->sel.endCol;
@@ -531,7 +575,30 @@ State selectCell(Table *table, unsigned row, unsigned col) {
     table->sel.endRow = row;
     table->sel.startCol = col;
     table->sel.endCol = col;
+    assureTableSize(table, row, col);
+    return SUCCESS;
+}
 
+// select multiple cells
+State selectRectangle(Table *table,
+    unsigned startRow, unsigned startCol,
+    unsigned endRow, unsigned endCol) {
+
+    if ((startRow == 0) || (startCol == 0))
+        return ERR_BAD_SELECTION;
+
+    if ((startRow > endRow) && (endCol == 0))
+        return ERR_BAD_SELECTION;
+
+    if ((startRow > endRow) && (endRow == 0))
+        return ERR_BAD_SELECTION;
+
+    table->sel.startRow = startRow;
+    table->sel.endRow = endRow;
+    table->sel.startCol = startCol;
+    table->sel.endCol = endCol;
+
+    assureTableSize(table, endRow, endCol);
     return SUCCESS;
 }
 
@@ -636,7 +703,7 @@ State swapCols(Table *table, unsigned c1, unsigned c2) {
     return SUCCESS;
 }
 
-// moves row while shifting the others
+// moves a column while shifting the others
 State moveCol(Table *table, unsigned start, unsigned end) {
     unsigned i = start;
 
@@ -776,23 +843,11 @@ State selectCoords_cmd(Context ctx) {
         return ERR_BAD_SYNTAX;
     }
 
-    if ((numValues == 1) && (values[0] == 0)) {
-        // apply the selection variable from memory
-        ctx.table->sel = ctx.vars->selVar;
-    }
+    if (numValues == 2)
+        return selectCell(ctx.table, values[0], values[1]);
 
-    if (numValues == 2) {
-        selectCell(ctx.table, values[0], values[1]);
-        return SUCCESS;
-    }
-
-    if (numValues == 4) {
-        ctx.table->sel.startRow = values[0];
-        ctx.table->sel.endRow = values[2];
-        ctx.table->sel.startCol = values[1];
-        ctx.table->sel.endCol = values[3];
-        return SUCCESS;
-    }
+    if (numValues == 4)
+        return selectRectangle(ctx.table, values[0], values[1], values[2], values[3]);
 
     return ERR_BAD_SYNTAX;
 }
@@ -1253,7 +1308,7 @@ State parseCommands(Program *prog, char *cmdStr) {
         {.name="[min]", .fn=selectMin_cmd},
         {.name="[max]", .fn=selectMax_cmd},
         {.name="[find ", .fn=selectFind_cmd},
-        {.name="[_]", .fn=selectStore_cmd},
+        {.name="[_]", .fn=selectLoad_cmd},
         // Layout commands
         {.name="irow", .fn=irow_cmd},
         {.name="arow", .fn=arow_cmd},
@@ -1273,7 +1328,7 @@ State parseCommands(Program *prog, char *cmdStr) {
         {.name="def _", .fn=def_cmd},
         {.name="use _", .fn=use_cmd},
         {.name="inc _", .fn=inc_cmd},
-        {.name="[set]", .fn=selectLoad_cmd},
+        {.name="[set]", .fn=selectStore_cmd},
         // Control commands
         {.name="goto ", .fn=goto_cmd},
         {.name="iszero _", .fn=iszero_cmd},
@@ -1507,11 +1562,14 @@ int main(int argc, char **argv) {
         s = executeProgram(&program, &table);
     // open the same file for writing
     if (s == SUCCESS) {
-        //fp = fopen(arguments.filename, "w");
+        fp = fopen(arguments.filename, "w");
         if (!fp)
             s = ERR_FILE_ACCESS;
     }
     free(arguments.filename);
+    // remove empty column on the right
+    if (s == SUCCESS)
+        s = deleteExcessCols(&table);
     // print the table into the file
     if (s == SUCCESS)
         printTable(&table, fp);
